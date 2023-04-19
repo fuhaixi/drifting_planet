@@ -1,0 +1,24 @@
+[package]
+name = "drifting_planet"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = { version = "1.13", features = [ "derive" ] }
+vek = {version = "0.15.10", features = ["serde"] }
+home = "0.5.4"
+wgpu = "0.15.1"
+winit = "0.28.1"
+image = "0.23"
+rand = "0.8.5"
+lru = "0.10.0"
+serde = { version = "1.0", features = ["serde_derive"]}
+bincode = "1.3.3"
+ron = "0.8"
+env_logger = "0.10"
+log = "0.4"
+pollster = "0.2"
+anyhow = "1.0.70"
+
