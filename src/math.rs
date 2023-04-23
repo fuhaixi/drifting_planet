@@ -1,5 +1,5 @@
 
-
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub enum AxisNormal{
     X = 0,
@@ -16,24 +16,23 @@ impl AxisNormal {
 
     #[allow(dead_code)]
     pub fn from_u32(num: u32) -> Self{
-        match num{
-            0 => AxisNormal::X,
-            1 => AxisNormal::Y,
-            2 => AxisNormal::Z,
-            3 => AxisNormal::Mx,
-            4 => AxisNormal::My,
-            5 => AxisNormal::Mz,
-            _ => panic!("num out of bound!"),
+        let num = num % 6;
+        unsafe{
+            std::mem::transmute(num)
         }
     }
     /// z
     #[allow(dead_code)]
     pub fn normal(&self) -> [f32; 3] {
         let mut arr : [f32; 3] = [0.0; 3];
-        let n = *self as usize ;
+        let n = *self as i32 ;
         let sig = if n < 3 {1.0} else {-1.0};
-        arr[n % 3] = sig;
+        arr[n as usize % 3] = sig;
         arr
+    }
+
+    pub fn index(&self) -> usize {
+        *self as usize
     }
     
     /// x
@@ -41,9 +40,9 @@ impl AxisNormal {
     pub fn tangent(&self) -> [f32; 3] {
 
         let mut arr : [f32; 3] = [0.0; 3];
-        let n = *self as usize ;
-        let sig = if n < 3 {1.0} else {-1.0};
-        arr[(n + 1) % 3] = sig;
+        let n = *self as i32 ;
+        let sig:i32 = if n < 3 {1} else {-1};
+        arr[(n + 1*sig + 3) as usize % 3] = sig as f32;
         arr
     }
 
@@ -52,20 +51,39 @@ impl AxisNormal {
     pub fn btangent(&self) -> [f32; 3] {
 
         let mut arr : [f32; 3] = [0.0; 3];
-        let n = *self as usize ;
-        // let sig = if n < 3 {1.0} else {-1.0};
-        arr[(n + 2) % 3] = 1.0;
+        let n = *self as i32 ;
+        let sig = if n < 3 {1} else {-1};
+        arr[(n + 2*sig + 3) as usize % 3] = sig as f32;
         arr
     }
 
-    pub fn mat3(&self) -> [[f32; 3]; 3] {
+    pub fn mat3_col_arrays(&self) -> [[f32; 3]; 3] {
         let mut arr : [[f32; 3]; 3] = [[0.0; 3]; 3];
-        let n = *self as usize ;
-        let sig = if n < 3 {1.0} else {-1.0};
-        arr[0][(n + 1) % 3] = sig;
-        arr[1][(n + 2) % 3] = 1.0;
-        arr[2][n % 3]= sig;
+        let n: i32 = *self as i32 ;
+        let sig = if n < 3 {1} else {-1};
+
+        arr[0][(n + 1*sig + 3) as usize % 3] = sig as f32;
+        arr[1][(n + 2*sig + 3) as usize % 3] = sig as f32;
+        arr[2][n  as usize % 3]= sig as f32;
         arr
+    }
+
+    pub fn mat3(&self) -> Mat3<f32> {
+        Mat3::from_col_arrays(self.mat3_col_arrays())
+    }
+
+
+    pub fn get_xy(&self, vec:&[f32; 3]) -> [f32; 2] {
+        let n = *self as i32 ;
+        let sig = if n < 3 {1} else {-1};
+        [vec[(n + 1*sig + 3) as usize % 3] * sig as f32, vec[(n + 2*sig + 3) as usize % 3] * sig as f32]
+    }
+
+    pub fn set_xy(&self, vec:&mut [f32; 3], xy : [f32; 2]) {
+        let n = *self as i32 ;
+        let sig = if n < 3 {1} else {-1};
+        vec[(n + 1*sig + 3) as usize % 3] = xy[0] * sig as f32;
+        vec[(n + 2*sig + 3) as usize % 3] = xy[1] * sig as f32;
     }
 }
 
@@ -93,6 +111,25 @@ pub fn cobe_wrap_with_axis(vec:&mut [f32; 3], axis: AxisNormal){
 #[cfg(test)]
 mod test{
     use super::*;
+    use rand;
+    #[test]
+    fn test_get_xy(){
+        //generate a random vector3
+        for _i in 0..100{
+            let vec: Vec3<f32> = Vec3::new(rand::random::<f32>(), rand::random::<f32>(), rand::random::<f32>());
+
+            let axis = AxisNormal::from_u32(rand::random::<u32>());
+            //get the x and y of the vector3
+            let xy = axis.get_xy(&vec.into_array());
+
+            let v = Mat3::<f32>::from_col_arrays(axis.mat3_col_arrays()).transposed() * vec;
+
+            let xy2 = [v.x, v.y];
+
+            
+            assert_eq!(xy, xy2);
+        }
+    }
 
     #[test]
     fn test_axis_normal(){
@@ -107,7 +144,7 @@ mod test{
     fn test_axis_normal_mat3(){
         for axis in AxisNormal::AXIS_ARRAY.iter(){
             let mat3 = Mat3::from_col_arrays([ axis.tangent(), axis.btangent() , axis.normal()]);
-            let mat3_2 =  Mat3::from_col_arrays(axis.mat3());
+            let mat3_2 =  Mat3::from_col_arrays(axis.mat3_col_arrays());
             //check if mat3 and mat3_2 is equal
             assert_eq!(mat3, mat3_2);
 

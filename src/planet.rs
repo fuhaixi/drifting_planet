@@ -1,7 +1,10 @@
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fs;
+use std::io::SeekFrom;
 use crate::camera;
+use crate::camera::Camera;
 use crate::math;
 use crate::texture;
 use crate::utils;
@@ -12,26 +15,28 @@ use std::io::prelude::*;
 use lru;
 use vek::*;
 use crate::utils::Name;
-struct ChunkNode{
-    pub terrain_chunk_index: u32,
-    pub children: Option<[Box<ChunkNode>; 4]>,
-    
-}
 
 
 
-pub struct TerrainChunkHead{
+
+pub struct ChunkInfo{
     pub raw_corners: [[f32; 2];4],
     pub axis_normal: math::AxisNormal,
     pub corners: [[f32; 3]; 4],
-    pub index: u32,
     pub depth: u8,
     pub detail_value: f32,
     pub subdivision: u32,
 
+
 }
 
-impl TerrainChunkHead{
+pub struct PlotInfo{
+    pub position: Vec3<f32>,
+    pub axis_normal: math::AxisNormal,
+    pub grid_coord: [u32; 2],
+}
+
+impl ChunkInfo{
     pub fn calc_detail(&self, camera: &camera::Camera, center: Vec3<f32>) -> f32{
         self.corners.map(|pos|{
             let position = Vec3::from(pos);
@@ -52,11 +57,18 @@ impl TerrainChunkHead{
 }
 
 
-pub struct TerrainChunk{
+pub struct ChunkTerrainData{
     mesh: mesh::Mesh,
 }
 
-impl TerrainChunk{
+impl ChunkTerrainData{
+    pub const CHUNK_TERRAIN_DATA_SIZE:u64 = std::mem::size_of::<Self>() as u64;
+
+    pub fn from_plot_data(plot_data: &PlotTerrainData, plot_info: &PlotInfo, ) -> Self{
+        let triangles = mesh::Triangles::create_grid_on_unit_cube(index_x, index_y, axis, segment_num, grid_segment_num)
+        let mesh = mesh::Mesh::
+    }
+
     pub fn to_writer<W>(&self, writer: &mut W) -> Result<(), std::io::Error> where W: std::io::Write{
         writer.write_all(bytemuck::cast_slice(&self.mesh.vertices))?;
         writer.write_all(bytemuck::cast_slice(&self.mesh.indices))?;
@@ -81,13 +93,13 @@ impl TerrainChunk{
 
 
 
-pub struct TerrainChunkState{
+pub struct ChunkTerrainState{
     mesh_state: mesh::MeshState,
 }
 
-impl TerrainChunkState{
+impl ChunkTerrainState{
     
-    pub fn from_chunk(chunk: &TerrainChunk, gpu_agent: &gpu::GpuAgent) -> Self{
+    pub fn from_chunk(chunk: &ChunkTerrainData, gpu_agent: &gpu::GpuAgent) -> Self{
         Self{
             mesh_state: mesh::MeshState::new(gpu_agent, &chunk.mesh),
         }
@@ -95,20 +107,218 @@ impl TerrainChunkState{
     }
 }
 
+pub struct PlotTerrainData{
+    pub cell_positions: Vec<Vec3<f32>>,
+    pub cell_elevations: Vec<f32>,
+    pub cell_normals: Vec<Vec3<f32>>,
+}
+
+impl PlotTerrainData{
+    pub fn new(cell_positions: Vec<Vec3<f32>>, map_func: impl Fn(&Vec3<f32>) -> (f32, Vec3<f32>)) -> Self{
+        let cell_elevations = cell_positions.iter().map(|pos|{
+            map_func(pos).0
+        }).collect();
+        let cell_normals = cell_positions.iter().map(|pos|{
+            map_func(pos).1
+        }).collect();
+
+        Self{
+            cell_positions,
+            cell_elevations,
+            cell_normals,
+        }
+    }
+}
+
+pub struct Region{
+    pub axis: math::AxisNormal,
+    pub plot_positions: Vec<Vec3<f32>>,
+    
+
+    pub plot_details: Vec<f32>,
+    pub chunk_details: Vec<f32>,
+
+    pub terrain_chunk_cache: utils::ArrayPool<ChunkTerrainData>,
+
+}
+
+pub struct RegionsShareInfo{
+    pub lod_level: u8,
+    pub region_side_plots_num: u32,
+    pub region_plots_num: u32,
+    pub region_chunks_num: u32,
+}
+
+impl RegionsShareInfo{
+    pub fn new(lod_level: u8) -> Self{
+        let region_side_plots_num = 2u32.pow(lod_level as u32);
+        let region_plots_num = region_side_plots_num.pow(2);
+        let region_chunks_num = (region_plots_num*4 -1) / 3;
+        Self{
+            lod_level,
+            region_side_plots_num,
+            region_plots_num,
+            region_chunks_num,
+        }
+    }
+}
+
+//one of six faces of a cube-sphere planet
+impl Region {
+    const POOL_MAX:u32 = 100;
+
+    pub fn new(axis: math::AxisNormal, planet_desc: &PlanetDescriptor) -> Self{
+        //could be optimized
+        let region_side_plots_num = 2u32.pow(planet_desc.lod_level as u32);
+        let region_plots_num = region_side_plots_num.pow(2);
+        let region_chunks_num = (region_plots_num*4 -1) / 3;
+        
+
+        let mut plot_positions = Vec::new();
+        for yi in 0..region_side_plots_num {
+            for xi in 0..region_side_plots_num{
+                let plot_index = yi * region_side_plots_num + xi;
+                
+                let pos = axis.mat3() * Vec3::new(
+                    -1.0 + (xi as f32 + 0.5) * 2.0 / region_side_plots_num as f32,
+                    -1.0 + (yi as f32 + 0.5) * 2.0 / region_side_plots_num as f32,
+                    1.0
+                );
+                
+                //cobe wrap pos
+                let mut pos = pos.into_array();
+                math::cobe_wrap_with_axis(&mut pos, axis);
+                let pos = Vec3::<f32>::from(pos).normalized() * planet_desc.radius;
+
+                plot_positions[plot_index as usize] = pos;
+
+            };
+        };
+
+        let plot_details = vec![0.0f32; region_plots_num as usize];
+
+        let chunk_details = vec![0.0f32; region_chunks_num as usize];
+
+        let terrain_chunk_cache = utils::ArrayPool::new(Self::POOL_MAX, region_chunks_num as usize);
+
+        Self { 
+            axis,
+            plot_positions,
+            plot_details,
+            chunk_details,
+            terrain_chunk_cache,
+        }
+    }
+
+    pub fn calc_detail_value(camera: &camera::Camera, pos: &Vec3<f32>, normal: &Vec3<f32>) -> f32{
+        let (dotre, distance) = camera.ray_dot(*pos, *normal);
+        let detail_value = if dotre < 0.0{
+            0.0f32
+        } else{
+            
+            dotre * 1.0 / (1.0 + distance/(camera.projection.zfar/2.0))
+        };
+        detail_value
+    }
+
+    
+
+    pub fn update(&mut self, camera: &camera::Camera){
+
+        for i in 0..self.plot_positions.len(){
+            let pos = self.plot_positions[i];
+            let detail_value = Self::calc_detail_value(camera, &pos, &pos.normalized());
+            self.plot_details[i] = detail_value;
+        }
+        let chunk_len = self.chunk_details.len();
+        let plot_len = self.plot_details.len();
+
+        for i in 0..plot_len {
+            self.chunk_details[chunk_len - plot_len + i] = self.plot_details[i];
+        }
+
+        for i in (0..chunk_len-plot_len).rev(){
+            self.chunk_details[i] = 
+                self.chunk_details[i *4 +1] + self.chunk_details[i*4 +2] + self.chunk_details[i *4 +3] + self.chunk_details[i*4 +4];
+        }
+
+        
+    }
+
+    fn update_terrain<R>(&mut self, terrain_datat_reader:&mut R) where R: std::io::Read, R: std::io::Seek{
+        for i in 0..self.chunk_details.len(){
+            let chunk_detail = self.chunk_details[i];
+            
+            if chunk_detail >= 1.0 && self.terrain_chunk_cache.get(i as u32).is_none(){
+                terrain_datat_reader.seek(SeekFrom::Start(i as u64 * ChunkTerrainData::CHUNK_TERRAIN_DATA_SIZE));
+                let terrain_data = ChunkTerrainData::from_reader(terrain_datat_reader).unwrap();
+
+                self.terrain_chunk_cache.put(i as u32, terrain_data);
+            }
+        }
+    }
+
+
+
+
+}
+
+pub struct RegionState{
+
+    
+    pub terrain_chunk_states_cache: utils::ArrayPool<ChunkTerrainState>,
+}
+
+impl RegionState{
+    pub fn from_region(region: &Region, gpu_agent: &gpu::GpuAgent, region_share: &RegionsShareInfo) -> Self{
+        let terrain_chunk_states_cache = utils::ArrayPool::new(Region::POOL_MAX, region_share.region_chunks_num as usize);
+        Self{
+            terrain_chunk_states_cache,
+        }
+    }
+
+    pub fn update(&mut self, region: &Region, gpu_agent: &gpu::GpuAgent, region_share: &RegionsShareInfo){
+        for i in 0..region_share.region_plots_num {
+            let chunk_detail = region.chunk_details[i as usize];
+            
+            
+            if chunk_detail >= 1.0{
+                let chunk = region.terrain_chunk_cache.get(i as u32).unwrap();
+                let chunk_state = ChunkTerrainState::from_chunk(chunk, gpu_agent);
+                self.terrain_chunk_states_cache.put(i as u32, chunk_state);
+            }
+        }
+    }
+
+    pub fn get_visible_terrain_states(&self, region: &Region, region_share: &RegionsShareInfo) -> Vec<&ChunkTerrainState>{
+        let mut visible = Vec::new();
+        for i in 0..region_share.region_plots_num {
+            let chunk_detail = region.chunk_details[i as usize];
+            
+            
+            if chunk_detail >= 1.0{
+                let chunk_state = self.terrain_chunk_states_cache.get(i as u32).unwrap();
+                visible.push(chunk_state);
+            }
+        }
+        visible
+    }
+
+
+}
+
 pub struct PlanetState<'a>{
     agent: &'a gpu::GpuAgent,
     terrain_render_pipeline: wgpu::RenderPipeline,
     sea_render_pipeline: wgpu::RenderPipeline,
     atomsphere_render_pipeline: wgpu::RenderPipeline,
-    terrain_chunk_states_cache: RefCell<lru::LruCache<(u8, u32), TerrainChunkState>>,
-
-    terrain_chunk_states: Vec<&'a TerrainChunkState>,
+    region_states: [RegionState; 6],
 }
 
 impl<'b, 'a: 'b> PlanetState<'a> {
     const POOL_MAX:u32 = 10000;
 
-    pub fn new(agent: &'a gpu::GpuAgent) -> Self{
+    pub fn new(agent: &'a gpu::GpuAgent, planet: & Planet) -> Self{
         use mesh::VertexLayout;
         let terrain_vertex_layouts = mesh::MeshVertex::vertex_layout::<0>();
         let terrain_pipeline_layout = agent.create_pipeline_layout(&[], &[camera::Camera::PUSH_CONSTANT_RANGE], "terrain pipeline layout");
@@ -153,35 +363,32 @@ impl<'b, 'a: 'b> PlanetState<'a> {
             Some(wgpu::Face::Back),
             "atomsphere render pipeline"
         );
+
+        let region_states = [
+            RegionState::from_region(&planet.regions[0], agent, &planet.regions_share),
+            RegionState::from_region(&planet.regions[1], agent, &planet.regions_share),
+            RegionState::from_region(&planet.regions[2], agent, &planet.regions_share),
+            RegionState::from_region(&planet.regions[3], agent, &planet.regions_share),
+            RegionState::from_region(&planet.regions[4], agent, &planet.regions_share),
+            RegionState::from_region(&planet.regions[5], agent, &planet.regions_share),
+        ];
         
         Self{
             terrain_render_pipeline,
             sea_render_pipeline,
             atomsphere_render_pipeline,
             agent,
-            terrain_chunk_states_cache: RefCell::new( lru::LruCache::new(std::num::NonZeroUsize::new(Self::POOL_MAX as usize).unwrap())),
-            terrain_chunk_states: vec![],
+            region_states,
         }
     }
 
     
 
     pub fn update(&mut self, planet: & Planet){
-        for fi in 0..planet.lod_trees.len(){
-            let tree = &planet.lod_trees[fi];
-            for node in tree.get_leaves(){
-                let head_index = node.terrain_chunk_index;
-                let index = (fi as u8, head_index);
-                if !self.terrain_chunk_states_cache.borrow().contains(&index){
-                    let mut chunk_cache = planet.terrain_chunk_cache.borrow_mut();
-                    let chunk = chunk_cache.get(&(fi as u8, head_index as u32)).unwrap();
-                    let chunk_state = TerrainChunkState::from_chunk(chunk, self.agent);
-                    self.terrain_chunk_states_cache.borrow_mut().put(index, chunk_state);
-                }
-            }
+        
+        for ri in 0..6{
+            self.region_states[ri].update(&planet.regions[ri], self.agent, &planet.regions_share);
         }
-
-    
 
     }
 
@@ -192,12 +399,17 @@ impl<'b, 'a: 'b> PlanetState<'a> {
         planet: &mut Planet,
     ) {
         render_pass.set_pipeline(&self.terrain_render_pipeline);
-        
-        for chunk_state in self.terrain_chunk_states.iter() {
-            render_pass.set_push_constants(wgpu::ShaderStages::VERTEX, 0, camera.get_uniform_data() );
-            render_pass.set_vertex_buffer(0, chunk_state.mesh_state.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(chunk_state.mesh_state.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..chunk_state.mesh_state.index_count, 0, 0..1);
+
+        for ri in 0..6{
+            
+            let terrain_states = self.region_states[ri].get_visible_terrain_states(&planet.regions[ri], &planet.regions_share);
+
+            for chunk_state in terrain_states.iter() {
+                render_pass.set_push_constants(wgpu::ShaderStages::VERTEX, 0, camera.get_uniform_data() );
+                render_pass.set_vertex_buffer(0, chunk_state.mesh_state.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(chunk_state.mesh_state.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..chunk_state.mesh_state.index_count, 0, 0..1);
+            }
         }
     }
 
@@ -224,10 +436,11 @@ pub struct Planet{
     pub lod_level: u8,
     pub position: Vec3<f32>,
     pub rotation: Quaternion<f32>,
-    pub terrain_chunk_cache: RefCell<lru::LruCache<(u8, u32), TerrainChunk>>,
 
-    terrain_chunk_heads: [Vec<TerrainChunkHead>; 6],
-    lod_trees: [LodTree; 6],
+    pub regions: [Region; 6],
+    pub regions_share: RegionsShareInfo,
+
+    
     ron_file: std::fs::File,
     terrain_data_file: std::fs::File,
 }
@@ -245,51 +458,33 @@ pub struct PlanetDescriptor{
 
 
 
-struct LodTree{
-    root: ChunkNode,
-    lod_level: u8,
-}
-
-impl LodTree{
-    pub fn new(radius: f32, center: Vec3<f32>, axis: math::AxisNormal, lod_level:u8) -> Self{
-        let corners:[[f32; 3]; 4] = mesh::QUAD_CORNERS.map(|(x, y)| {
-            
-            let p = Vec3::from(axis.normal()) + Vec3::from( axis.tangent()) * x + Vec3::from(axis.btangent()) * y;
-            let corner = center + (p.normalized() * radius);
-
-            corner.into_array()
-        });
-        let root = ChunkNode{
-            terrain_chunk_index: 0,
-            children: None,
-        };
-
-
-        Self{
-            root,
-            lod_level,
-        }
-    }
-
-    pub fn get_leaves(&self) -> Vec<&ChunkNode> {
-        let mut leaves = Vec::new();
-        let mut stack = vec![&self.root];
-        while let Some(node) = stack.pop(){
-            if let Some(children) = &node.children{
-                stack.extend(children.iter().map(|child| child.as_ref()));
-            }else{
-                leaves.push(node);
-            }
-        }
-        leaves
-    }
-}
-
-
 
 
 impl Planet{
     const POOL_MAX: u32 = 10000;
+
+    pub fn build(desc: &PlanetDescriptor, world_dir: std::path::PathBuf) -> Result<(), std::io::Error>{
+        let ron_file_path = world_dir.join(desc.name).with_extension("ron");
+        let ron_file = utils::create_new_file(ron_file_path)?;
+        let mut ron_writer = std::io::BufWriter::new(ron_file);
+        ron_writer.write_all(ron::ser::to_string(&desc).unwrap().as_bytes())?;
+        let ron_file = ron_writer.into_inner().unwrap();
+
+        let terrain_data_file_path = world_dir.join(desc.name).with_extension("terrain");
+        let terrain_data_file = utils::create_new_file(terrain_data_file_path)?;
+        let mut terrain_data_writer = std::io::BufWriter::new(terrain_data_file);
+        
+        {//create terrain data
+
+            let info = RegionsShareInfo::new(desc.lod_level);
+
+            for ri in 0..6{
+                let plot_terrain 
+            }
+        };
+        
+
+    }
     
     ///create new planet and save
     /// save directory structure:
@@ -311,21 +506,23 @@ impl Planet{
 
 
 
-        let rotation = Quaternion::<f32>::identity();
-        let face_chunks_num = 4u32.pow(desc.lod_level as u32 +1) -1;
-        
+        let rotation: Quaternion<f32> = Quaternion::<f32>::identity();
+        let region_chunks_num = 4u32.pow(desc.lod_level as u32 +1) -1;
+        let region_plot_num = 4u32.pow(desc.lod_level as u32);
+        let region_side_plot_num = 2u32.pow(desc.lod_level as u32);
         
         //generate terrain chunks head and save chunk data to file
-        let mut terrain_chunk_heads: [Vec<TerrainChunkHead>; 6] = Default::default();
+        let mut terrain_chunk_heads: [Vec<ChunkInfo>; 6] = Default::default();
+
         for (face_index, &axis) in math::AxisNormal::AXIS_ARRAY.iter().enumerate()  {
             let mut level_left_index = 1;
             let mut subdivision = 1;
             let mut depth = 0;
             let mut detail_value = 2.0f32.powi(depth as i32 - desc.lod_level as i32);
 
-            let mut chunk_heads: Vec<TerrainChunkHead> = Vec::new();
+            let mut chunk_heads: Vec<ChunkInfo> = Vec::new();
 
-            for i in 0..face_chunks_num {
+            for i in 0..region_chunks_num {
                 if i >= level_left_index{
                     level_left_index = 4*level_left_index + 1;
                     depth += 1;
@@ -361,7 +558,7 @@ impl Planet{
                 }
                 
                 
-                let terrain_chunk = TerrainChunk{
+                let terrain_chunk = ChunkTerrainData{
                     mesh
                 };
                 //write terrain chunk
@@ -379,7 +576,7 @@ impl Planet{
                     c.into_array()
                 });
 
-                let chunk_head =  TerrainChunkHead{
+                let chunk_head =  ChunkInfo{
                     depth,
                     index: i,
                     axis_normal: axis,
@@ -397,8 +594,41 @@ impl Planet{
             
         }
 
+        let plot_positions = {
+            let mut plot_pos: [Vec<Vec3<f32>>; 6] = math::AxisNormal::AXIS_ARRAY.map(|i| vec![Vec3::<f32>::zero(); region_plot_num as usize]);
 
-        let lod_trees:[LodTree; 6] = math::AxisNormal::AXIS_ARRAY.map(|i| LodTree::new(desc.radius, desc.position, i, desc.lod_level) );
+            //fill plot pos array 
+            for axis in math::AxisNormal::AXIS_ARRAY{
+                for yi in 0..region_side_plot_num {
+                    for xi in 0..region_side_plot_num{
+                        let plot_index = yi * region_side_plot_num + xi;
+                        
+                        let pos = axis.mat3() * Vec3::new(
+                            -1.0 + (xi as f32 + 0.5) * 2.0 / region_side_plot_num as f32,
+                            -1.0 + (yi as f32 + 0.5) * 2.0 / region_side_plot_num as f32,
+                            1.0
+                        );
+                        
+                        //cobe wrap pos
+                        let mut pos = pos.into_array();
+                        math::cobe_wrap_with_axis(&mut pos, axis);
+                        let pos = Vec3::<f32>::from(pos).normalized() * desc.radius;
+
+                        plot_pos[axis.index()][plot_index as usize] = pos;
+
+                    }
+                }
+            }
+            plot_pos
+        };
+
+        let mut plot_details: [Vec<f32>; 6] = math::AxisNormal::AXIS_ARRAY.map(|i| vec![0.0; region_plot_num as usize]);
+
+        
+        
+        
+
+        
 
         let terrain_chunk_cache = RefCell::new( lru::LruCache::new(std::num::NonZeroUsize::new(Self::POOL_MAX as usize).unwrap()));
 
@@ -413,6 +643,8 @@ impl Planet{
                 lod_trees,
                 lod_level:desc.lod_level,
                 terrain_chunk_cache,
+                
+
 
                 ron_file,
                 terrain_data_file,
@@ -421,17 +653,19 @@ impl Planet{
     }
 
     
-    pub fn load_chunk_data(&self, tree_index: usize, chunk_index: usize) -> Result<TerrainChunk, std::io::Error>{
+    pub fn load_chunk_data(&self, tree_index: usize, chunk_index: usize) -> Result<ChunkTerrainData, std::io::Error>{
         let mut reader = std::io::BufReader::new(&self.terrain_data_file);
         let chunks_num_per_face = self.terrain_chunk_heads[tree_index].len();
         let data_index = tree_index * chunks_num_per_face + chunk_index;
         reader.seek(std::io::SeekFrom::Start(data_index as u64 * CHUNK_MESH_DATA_BYTE_NUM as u64));
-        TerrainChunk::from_reader(&mut reader)
+        ChunkTerrainData::from_reader(&mut reader)
         
     }
 
     pub fn update(&mut self, delta_time: f32,  camera: &camera::Camera){
         self.update_lod_trees(camera);
+
+
     }
 
 

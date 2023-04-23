@@ -101,4 +101,33 @@ impl Camera{
         self.uniform = self.build_uniform();
     }
 
+    pub fn calc_depth(&self, point: Vec3<f32>) -> f32{
+        let p = self.ndc_transform(point);
+        p.z
+    }
+
+}
+
+
+
+
+mod test{
+    use super::*;
+
+    #[test]
+    fn test_ndc_transform(){
+        let camera = Camera::new(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Projection{
+                aspect: 1.0,
+                fovy: std::f32::consts::FRAC_PI_2,
+                znear: 0.1,
+                zfar: 100.0,
+            }
+        );
+        let p = camera.ndc_transform(Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(p, Vec3::new(0.0, 0.0, 0.0));
+    }
 }

@@ -270,6 +270,23 @@ impl Mesh{
 
         
     }
+
+    pub fn from_triangles(triangles: Triangles) -> Self{
+        let len :u32 = triangles.0.len() as u32;
+  
+        let vertices: Vec<MeshVertex> = (0..len).into_iter().map(|i|{
+            MeshVertex{
+                pos: triangles.0[i as usize],
+                normal: [0.0, 0.0, 0.0],
+                tex_coord: [0.0, 0.0],
+            }
+        }).collect();
+
+        Self{
+            vertices,
+            indices: triangles.1,
+        }
+    }
 }
 
 
@@ -329,7 +346,7 @@ impl Triangles{
         
         let mut pos_arr: Vec<[f32; 3]> = vec![[0.0; 3]; point_num.pow(2) as usize];
         let start_point =  Vec3::<f32>::new(index_x as f32 * size - 1.0, index_y as f32 * size -1.0, 1.0);
-        let mat3 =  Mat3::from_col_arrays(axis.mat3());
+        let mat3 =  Mat3::from_col_arrays(axis.mat3_col_arrays());
         for yi in 0..point_num{
             for xi in 0..point_num{//loop each vertex
                 let dx = xi as f32 * grid_cell_size;
@@ -468,11 +485,14 @@ mod tests {
 
     #[test]
     fn test_planet_gen(){
-        let planet = gen_planet(4, 10);
+        let planet = gen_planet(4, 10, true);
         planet.save_obj_file("test/test_objs/planet.obj");
+        let planet_no_wrap = gen_planet(4, 10, false);
+        planet_no_wrap.save_obj_file("test/test_objs/planet_no_wrap.obj");
+        
     }
 
-    fn gen_planet(segs: u32, grid_segs: u32) -> Triangles{
+    fn gen_planet(segs: u32, grid_segs: u32, use_wrap: bool) -> Triangles{
         let mut cube_grid = Triangles(vec![], vec![]);
         //merge six face grid into cube grid
         for i in 0..6{
@@ -485,8 +505,10 @@ mod tests {
 
                     //cobe wrap
                     for i in 0..face_grid.0.len(){
-                        math::cobe_wrap_with_axis(&mut face_grid.0[i], axis);
-
+                        if use_wrap{
+                            math::cobe_wrap_with_axis(&mut face_grid.0[i], axis);
+                        }
+                       
                        //normalize positions
                        face_grid.0[i] = Vec3::<f32>::from(face_grid.0[i]).normalized().into_array();
                     }
