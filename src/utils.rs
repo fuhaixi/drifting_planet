@@ -1,3 +1,4 @@
+use std::ops::{Index, IndexMut};
 use std::path::Path;
 use std::collections::VecDeque;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
@@ -35,15 +36,30 @@ impl Name{
     }
 }
 
+
+
 use vek::*;
 pub struct Grid<T>{
     pub extent: Extent2<u32>,
     pub data: Vec<T>,
 }
 
-impl<T> Grid<T>{
+impl<T> Grid<T> where T: Clone{
     pub fn new(extent: Extent2<u32>, data: Vec<T>) -> Self{
         Self{extent, data}
+    }
+
+    pub fn new_with_default(extent: Extent2<u32>, default: T) -> Self{
+        let data = std::iter::repeat(default).take((extent.w * extent.h) as usize).collect::<Vec<_>>();
+        Self{extent, data}
+    }
+
+    pub fn new_square(side_num: u32, data: Vec<T>) -> Self{
+        Self::new(Extent2::new(side_num, side_num), data)
+    }
+
+    pub fn new_square_with_default(side_num: u32, default: T) -> Self{
+        Self::new_with_default(Extent2::new(side_num, side_num), default)
     }
 
     pub fn get(&self, pos: Vec2<u32>) -> Option<&T>{
@@ -63,8 +79,86 @@ impl<T> Grid<T>{
         (y * self.extent.w + x) as usize
     }
 
-    pub fn sample
+    pub fn set(&mut self, pos: Vec2<u32>, value: T){
+        let index = self.get_index(pos);
+        self.data[index] = value;
+    }
+
+    pub fn map<F, P: Clone>(&self, f: F) -> Grid<P> where F: Fn(&T) -> P{
+        let data = self.data.iter().map(f).collect::<Vec<_>>();
+        Grid::new(self.extent, data)
+    }
 }
+
+impl<T> Grid<T> where T: std::ops::Mul<f32, Output = T> + std::ops::Add<T, Output =  T> + Clone{
+    
+    pub fn bilinear_sample(&self, uv: Vec2<f32>) -> T {
+        let x = uv.x * self.extent.w as f32;
+        let y = uv.y * self.extent.h as f32;
+
+        let x0 = x.floor() as u32;
+        let x1 = x.ceil() as u32;
+        let y0 = y.floor() as u32;
+        let y1 = y.ceil() as u32;
+
+        let x0 = x0.min(self.extent.w - 1);
+        let x1 = x1.min(self.extent.w - 1);
+        let y0 = y0.min(self.extent.h - 1);
+        let y1 = y1.min(self.extent.h - 1);
+
+        let q00 = self.get(Vec2::new(x0, y0)).unwrap();
+        let q01 = self.get(Vec2::new(x0, y1)).unwrap();
+        let q10 = self.get(Vec2::new(x1, y0)).unwrap();
+        let q11 = self.get(Vec2::new(x1, y1)).unwrap();
+
+        let s = x - x0 as f32;
+        let t = y - y0 as f32;
+
+        let q0 = (*q10 )* s + (*q00) * (1.0 - s) ;
+        let q1 = (*q11) * s + (*q01) * (1.0 - s) ;
+
+        let ret = q1 * t + q0 * (1.0 - t);
+        ret
+    }
+
+    pub fn len(&self) -> usize{
+        self.data.len()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<T>{
+        self.data.iter()
+    }
+
+}
+
+//implement iter() for grid
+impl<T> IntoIterator for Grid<T>{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter{
+        self.data.into_iter()
+    }
+}
+
+
+
+impl<T> Index<usize> for Grid<T>{
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output{
+        &self.data[index]
+    }
+}
+
+//index mut
+impl<T> IndexMut<usize> for Grid<T>{
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output{
+        &mut self.data[index]
+    }
+}
+
+
 
 
 pub struct ArrayPool<T>{
@@ -131,3 +225,34 @@ pub fn create_new_file<P>(path: P) -> Result<std::fs::File, std::io::Error> wher
     }
 }
 
+
+#[cfg(test)]
+mod test{
+    use super::*;
+    use vek::*;
+    #[test]
+    fn test_name(){
+        let name = Name::new("test");
+        assert_eq!(name.as_str(), "test");
+        assert_eq!(name.as_bytes(), b"test");
+        assert_eq!(name.to_string(), "test");
+    }
+
+
+    #[test]
+    fn test_grid(){
+        let grid = Grid::new(Extent2::new(2, 2), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(grid.get(Vec2::new(0, 0)), Some(&1.0));
+        assert_eq!(grid.get(Vec2::new(1, 0)), Some(&2.0));
+        assert_eq!(grid.get(Vec2::new(0, 1)), Some(&3.0));
+        assert_eq!(grid.get(Vec2::new(1, 1)), Some(&4.0));
+        assert_eq!(grid.get(Vec2::new(2, 1)), None);
+        assert_eq!(grid.get(Vec2::new(1, 2)), None);
+        assert_eq!(grid.get(Vec2::new(2, 2)), None);
+
+        for (i, v) in grid.iter().enumerate(){
+            assert_eq!(*v, (i + 1) as f32);
+        }
+        
+    }
+}

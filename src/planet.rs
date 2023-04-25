@@ -26,8 +26,6 @@ pub struct ChunkInfo{
     pub depth: u8,
     pub detail_value: f32,
     pub subdivision: u32,
-
-
 }
 
 pub struct PlotInfo{
@@ -35,6 +33,8 @@ pub struct PlotInfo{
     pub axis_normal: math::AxisNormal,
     pub grid_coord: [u32; 2],
 }
+
+
 
 impl ChunkInfo{
     pub fn calc_detail(&self, camera: &camera::Camera, center: Vec3<f32>) -> f32{
@@ -64,9 +64,45 @@ pub struct ChunkTerrainData{
 impl ChunkTerrainData{
     pub const CHUNK_TERRAIN_DATA_SIZE:u64 = std::mem::size_of::<Self>() as u64;
 
-    pub fn from_plot_data(plot_data: &PlotTerrainData, plot_info: &PlotInfo, ) -> Self{
-        let triangles = mesh::Triangles::create_grid_on_unit_cube(index_x, index_y, axis, segment_num, grid_segment_num)
-        let mesh = mesh::Mesh::
+    pub fn from_plot_data(plot_data: &PlotTerrainData, plot_info: &PlotInfo, planet_desc: &PlanetDescriptor) -> Self{
+        let segment_num = planet_desc.calc_plots_side_num() as u32;
+
+        let triangles = mesh::Triangles::create_grid_on_unit_cube(
+            plot_info.grid_coord[0],
+            plot_info.grid_coord[1], 
+            plot_info.axis_normal, 
+            segment_num, 
+            planet_desc.mesh_grid_segment_num,
+        );
+
+        // let mesh = mesh::Mesh::from_triangles(&triangles);
+
+        let vertices = triangles.0.iter().map(|v|{
+
+            let position: Vec3<f32> = (*v).into();
+            let xy = plot_info.axis_normal.get_xy(v);
+            let uv = Vec2::new((xy[0] + 1.0) / segment_num as f32, (xy[1] + 1.0) / segment_num as f32);
+
+            let position = position.normalized();
+石油石油
+            
+
+            let normal = v.normal;
+            let uv = v.uv;
+            let color = plot_data.color;
+
+            mesh::MeshVertex{
+                position,
+                normal,
+                uv,
+                color,
+            }
+        }).collect();
+
+
+        Self{
+            mesh,
+        }
     }
 
     pub fn to_writer<W>(&self, writer: &mut W) -> Result<(), std::io::Error> where W: std::io::Write{
@@ -108,19 +144,20 @@ impl ChunkTerrainState{
 }
 
 pub struct PlotTerrainData{
-    pub cell_positions: Vec<Vec3<f32>>,
-    pub cell_elevations: Vec<f32>,
-    pub cell_normals: Vec<Vec3<f32>>,
+    pub cell_positions: utils::Grid<Vec3<f32>>,
+    pub cell_elevations: utils::Grid<f32>,
+    pub cell_normals: utils::Grid<Vec3<f32>>,
 }
 
 impl PlotTerrainData{
-    pub fn new(cell_positions: Vec<Vec3<f32>>, map_func: impl Fn(&Vec3<f32>) -> (f32, Vec3<f32>)) -> Self{
-        let cell_elevations = cell_positions.iter().map(|pos|{
+    pub fn new(cell_positions: utils::Grid<Vec3<f32>>, map_func: impl Fn(&Vec3<f32>) -> (f32, Vec3<f32>)) -> Self{
+        let cell_elevations: utils::Grid<f32> = cell_positions.map(|pos|{
             map_func(pos).0
-        }).collect();
-        let cell_normals = cell_positions.iter().map(|pos|{
+        });
+
+        let cell_normals = cell_positions.map(|pos|{
             map_func(pos).1
-        }).collect();
+        });
 
         Self{
             cell_positions,
@@ -135,15 +172,14 @@ pub struct Region{
     pub plot_positions: Vec<Vec3<f32>>,
     
 
-    pub plot_details: Vec<f32>,
-    pub chunk_details: Vec<f32>,
+    pub plot_details: utils::Grid<f32>,
+    pub chunk_details: utils::Grid<f32>,
 
     pub terrain_chunk_cache: utils::ArrayPool<ChunkTerrainData>,
 
 }
 
 pub struct RegionsShareInfo{
-    pub lod_level: u8,
     pub region_side_plots_num: u32,
     pub region_plots_num: u32,
     pub region_chunks_num: u32,
@@ -155,7 +191,6 @@ impl RegionsShareInfo{
         let region_plots_num = region_side_plots_num.pow(2);
         let region_chunks_num = (region_plots_num*4 -1) / 3;
         Self{
-            lod_level,
             region_side_plots_num,
             region_plots_num,
             region_chunks_num,
@@ -195,9 +230,9 @@ impl Region {
             };
         };
 
-        let plot_details = vec![0.0f32; region_plots_num as usize];
+        let plot_details = utils::Grid::new_square_with_default(region_side_plots_num as u32, 0.0f32);
 
-        let chunk_details = vec![0.0f32; region_chunks_num as usize];
+        let chunk_details = utils::Grid::new_square_with_default(region_side_plots_num as u32, 0.0f32);
 
         let terrain_chunk_cache = utils::ArrayPool::new(Self::POOL_MAX, region_chunks_num as usize);
 
@@ -452,8 +487,14 @@ pub struct PlanetDescriptor{
     pub lod_level: u8,
     pub position: Vec3<f32>,
     pub rotation: Quaternion<f32>,
+    pub mesh_grid_segment_num: u32,
 }
 
+impl PlanetDescriptor{
+    pub fn calc_plots_side_num(&self) -> u32{
+        2u32.pow(self.lod_level as u32)
+    }
+}
 
 
 

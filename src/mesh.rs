@@ -271,7 +271,7 @@ impl Mesh{
         
     }
 
-    pub fn from_triangles(triangles: Triangles) -> Self{
+    pub fn from_triangles(triangles: &Triangles) -> Self{
         let len :u32 = triangles.0.len() as u32;
   
         let vertices: Vec<MeshVertex> = (0..len).into_iter().map(|i|{
