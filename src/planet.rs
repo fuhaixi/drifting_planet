@@ -6,6 +6,7 @@ use std::io::SeekFrom;
 use crate::camera;
 use crate::camera::Camera;
 use crate::math;
+use crate::math::AxisNormal;
 use crate::texture;
 use crate::utils;
 use serde::{Serialize, Deserialize};
@@ -83,22 +84,27 @@ impl ChunkTerrainData{
             let xy = plot_info.axis_normal.get_xy(v);
             let uv = Vec2::new((xy[0] + 1.0) / segment_num as f32, (xy[1] + 1.0) / segment_num as f32);
 
-            let position = position.normalized();
-石油石油
+
+            let normal = position.normalized();
+            let position = position.normalized() * planet_desc.radius;
+
             
 
-            let normal = v.normal;
-            let uv = v.uv;
-            let color = plot_data.color;
+        
+        
 
             mesh::MeshVertex{
-                position,
-                normal,
-                uv,
-                color,
+                pos: position.into_array(),
+                normal: normal.into_array(),
+                tex_coord: uv.into_array(),
             }
         }).collect();
 
+
+        let mesh = mesh::Mesh{
+            vertices,
+            indices: triangles.1,
+        };
 
         Self{
             mesh,
@@ -144,13 +150,15 @@ impl ChunkTerrainState{
 }
 
 pub struct PlotTerrainData{
-    pub cell_positions: utils::Grid<Vec3<f32>>,
+    pub cell_positions: utils::Grid<[f32; 3]>,
     pub cell_elevations: utils::Grid<f32>,
-    pub cell_normals: utils::Grid<Vec3<f32>>,
+    pub cell_normals: utils::Grid<[f32; 3]>,
 }
 
 impl PlotTerrainData{
-    pub fn new(cell_positions: utils::Grid<Vec3<f32>>, map_func: impl Fn(&Vec3<f32>) -> (f32, Vec3<f32>)) -> Self{
+    pub const ELEMENT_BYTE_SIZE: u64 = std::mem::size_of::<([f32; 7])>() as u64;
+
+    pub fn new(cell_positions: utils::Grid<[f32; 3]>, map_func: impl Fn(&[f32; 3]) -> (f32, [f32; 3])) -> Self{
         let cell_elevations: utils::Grid<f32> = cell_positions.map(|pos|{
             map_func(pos).0
         });
@@ -165,18 +173,51 @@ impl PlotTerrainData{
             cell_normals,
         }
     }
+
+    pub fn to_writer<W>(&self, writer: &mut W) -> Result<(), std::io::Error> where W: std::io::Write{
+        writer.write_all(bytemuck::cast_slice(&self.cell_positions.data))?;
+        writer.write_all(bytemuck::cast_slice(&self.cell_elevations.data))?;
+        writer.write_all(bytemuck::cast_slice(&self.cell_normals.data))?;
+        Ok(())
+    }
+
+    //create from reader with specified element num
+    pub fn from_reader<R>(reader: &mut R, cells_side_num: u32) -> Result<Self, std::io::Error> where R: std::io::Read{
+        let element_num = cells_side_num * cells_side_num;
+        let mut cell_positions = vec![[0.0f32; 3]; element_num as usize];
+        let mut cell_elevations = vec![0.0f32; element_num as usize];
+        let mut cell_normals = vec![[0.0f32; 3]; element_num as usize];
+
+        reader.read_exact(bytemuck::cast_slice_mut(&mut cell_positions))?;
+        reader.read_exact(bytemuck::cast_slice_mut(&mut cell_elevations))?;
+        reader.read_exact(bytemuck::cast_slice_mut(&mut cell_normals))?;
+        Ok(Self{
+            cell_positions: utils::Grid::new_square(cells_side_num, cell_positions),
+            cell_elevations: utils::Grid::new_square(cells_side_num, cell_elevations),
+            cell_normals: utils::Grid::new_square(cells_side_num, cell_normals),
+        })
+    }
+
+    
 }
 
 pub struct Region{
     pub axis: math::AxisNormal,
-    pub plot_positions: Vec<Vec3<f32>>,
+    pub plot_positions_grid: utils::Grid<[f32; 3]>,
     
+    pub plot_datas_grid: utils::Grid<PlotTerrainData>,
 
-    pub plot_details: utils::Grid<f32>,
-    pub chunk_details: utils::Grid<f32>,
-
+    //vary
+    pub plot_details_grid: utils::Grid<f32>,
+    pub chunk_details: Vec<f32>,
     pub terrain_chunk_cache: utils::ArrayPool<ChunkTerrainData>,
 
+}
+
+#[derive(Serialize, Deserialize)]
+struct RegionRon{
+    pub axis: math::AxisNormal,
+    pub plot_positions_grid: utils::Grid<[f32; 3]>,
 }
 
 pub struct RegionsShareInfo{
@@ -202,14 +243,24 @@ impl RegionsShareInfo{
 impl Region {
     const POOL_MAX:u32 = 100;
 
-    pub fn new(axis: math::AxisNormal, planet_desc: &PlanetDescriptor) -> Self{
-        //could be optimized
+    pub fn build(axis: math::AxisNormal, planet_desc: &PlanetDescriptor, noise_func: impl Fn(&[f32; 3]) -> (f32, [f32; 3]),planet_dir: std::path::PathBuf) {
         let region_side_plots_num = 2u32.pow(planet_desc.lod_level as u32);
         let region_plots_num = region_side_plots_num.pow(2);
         let region_chunks_num = (region_plots_num*4 -1) / 3;
-        
 
-        let mut plot_positions = Vec::new();
+       
+        
+        //creat a plot_data file
+        let plot_data_file_path = planet_dir.join(format!("plot_datas_{}.bin", axis));
+        let mut plot_data_file = std::fs::File::create(plot_data_file_path).unwrap();
+        let mut plot_data_writer = std::io::BufWriter::new(&mut plot_data_file);
+        
+        //create a chunk terrain data file
+        let chunk_data_file_path = planet_dir.join(format!("chunk_datas_{}.bin", axis));
+        let mut chunk_data_file = std::fs::File::create(chunk_data_file_path).unwrap();
+        let mut chunk_data_writer = std::io::BufWriter::new(&mut chunk_data_file);
+
+        let mut plot_positions:Vec<[f32; 3]> = vec![[0.0,0.0,0.0]; region_plots_num as usize];
         for yi in 0..region_side_plots_num {
             for xi in 0..region_side_plots_num{
                 let plot_index = yi * region_side_plots_num + xi;
@@ -225,25 +276,97 @@ impl Region {
                 math::cobe_wrap_with_axis(&mut pos, axis);
                 let pos = Vec3::<f32>::from(pos).normalized() * planet_desc.radius;
 
-                plot_positions[plot_index as usize] = pos;
+                let plot_info = PlotInfo{
+                    position: pos,
+                    axis_normal: axis,
+                    grid_coord: [xi, yi],
+                };
+
+                let cell_positions = mesh::Triangles::create_grid_points_on_unit_cube(xi, yi, axis, region_side_plots_num, planet_desc.mesh_grid_segment_num).into_iter().map(|p| {
+                    let p = Vec3::<f32>::from(p);
+                    let p = p.normalized() * planet_desc.radius;
+                    p.into_array()
+                }).collect();
+                let cell_positions = utils::Grid::new_square(planet_desc.mesh_grid_segment_num, cell_positions);
+                
+
+                let plot_data = PlotTerrainData::new(cell_positions, &noise_func);
+                plot_data.to_writer(&mut plot_data_writer).unwrap();
+
+                let chunk_terrain_data = ChunkTerrainData::from_plot_data(&plot_data, &plot_info, planet_desc);
+
+                chunk_terrain_data.to_writer(&mut chunk_data_writer).unwrap();
+
+                plot_positions[plot_index as usize] = pos.into_array();
 
             };
+
+            
         };
 
-        let plot_details = utils::Grid::new_square_with_default(region_side_plots_num as u32, 0.0f32);
+        
+         //create a region ron file
+        let region_ron_file_path = planet_dir.join(format!("region_{}.ron", axis));
+        let mut region_ron_file = std::fs::File::create(region_ron_file_path).unwrap();
+        let mut region_ron_writer = std::io::BufWriter::new(&mut region_ron_file);
 
-        let chunk_details = utils::Grid::new_square_with_default(region_side_plots_num as u32, 0.0f32);
-
-        let terrain_chunk_cache = utils::ArrayPool::new(Self::POOL_MAX, region_chunks_num as usize);
-
-        Self { 
+        let region_ron = RegionRon{
             axis,
-            plot_positions,
-            plot_details,
-            chunk_details,
-            terrain_chunk_cache,
-        }
+            plot_positions_grid: utils::Grid::new_square(region_side_plots_num, plot_positions),
+        };
+
+        ron::ser::to_writer_pretty(&mut region_ron_writer, &region_ron, ron::ser::PrettyConfig::default()).unwrap();
+        
     }
+
+  
+
+
+    pub fn load_from_dir(axis: math::AxisNormal, planet_dir: std::path::PathBuf, region_share: &RegionsShareInfo, planet_desc: &PlanetDescriptor) -> Result<Self, std::io::Error>{
+
+        
+
+        let plot_details = utils::Grid::new_square_with_default(region_share.region_side_plots_num as u32, 0.0f32);
+
+        let chunk_details = vec![0.0f32; region_share.region_chunks_num as usize];
+
+        let terrain_chunk_cache = utils::ArrayPool::<ChunkTerrainData>::new(Self::POOL_MAX, region_share.region_chunks_num as usize);
+
+        //load regionron from file
+        let region_ron: RegionRon = {
+            let region_ron_file_path = planet_dir.join(format!("region_{}.ron", axis));
+            let region_ron_file = std::fs::File::open(region_ron_file_path)?;
+            let region_ron_reader = std::io::BufReader::new(region_ron_file);
+            ron::de::from_reader(region_ron_reader).unwrap()
+        };
+
+        //load plot datas from file
+        let plot_datas: Vec<PlotTerrainData> = {
+            let plot_data_file_path = planet_dir.join(format!("plot_datas_{}.bin", axis));
+            let plot_data_file = std::fs::File::open(plot_data_file_path)?;
+            let mut plot_data_reader = std::io::BufReader::new(plot_data_file);
+            let mut plot_datas = Vec::new();
+
+            let cells_side_num = planet_desc.mesh_grid_segment_num;
+            for _ in 0..region_share.region_plots_num{
+                let plot_data = PlotTerrainData::from_reader(&mut plot_data_reader, cells_side_num).unwrap();
+                plot_datas.push(plot_data);
+            }
+            plot_datas
+        };
+
+        //return self
+
+        Ok(Self{
+            axis,
+            plot_positions_grid: region_ron.plot_positions_grid,
+            plot_details_grid: plot_details,
+            chunk_details,
+            plot_datas_grid: utils::Grid::new_square(region_share.region_side_plots_num as u32, plot_datas),
+            terrain_chunk_cache,
+        })
+
+    }   
 
     pub fn calc_detail_value(camera: &camera::Camera, pos: &Vec3<f32>, normal: &Vec3<f32>) -> f32{
         let (dotre, distance) = camera.ray_dot(*pos, *normal);
@@ -260,16 +383,16 @@ impl Region {
 
     pub fn update(&mut self, camera: &camera::Camera){
 
-        for i in 0..self.plot_positions.len(){
-            let pos = self.plot_positions[i];
+        for i in 0..self.plot_positions_grid.len(){
+            let pos:Vec3<f32> =  self.plot_positions_grid[i].into();
             let detail_value = Self::calc_detail_value(camera, &pos, &pos.normalized());
-            self.plot_details[i] = detail_value;
+            self.plot_details_grid[i] = detail_value;
         }
         let chunk_len = self.chunk_details.len();
-        let plot_len = self.plot_details.len();
+        let plot_len = self.plot_details_grid.len();
 
         for i in 0..plot_len {
-            self.chunk_details[chunk_len - plot_len + i] = self.plot_details[i];
+            self.chunk_details[chunk_len - plot_len + i] = self.plot_details_grid[i];
         }
 
         for i in (0..chunk_len-plot_len).rev(){
@@ -280,13 +403,13 @@ impl Region {
         
     }
 
-    fn update_terrain<R>(&mut self, terrain_datat_reader:&mut R) where R: std::io::Read, R: std::io::Seek{
+    fn update_terrain<R>(&mut self, terrain_data_reader:&mut R) where R: std::io::Read, R: std::io::Seek{
         for i in 0..self.chunk_details.len(){
             let chunk_detail = self.chunk_details[i];
             
             if chunk_detail >= 1.0 && self.terrain_chunk_cache.get(i as u32).is_none(){
-                terrain_datat_reader.seek(SeekFrom::Start(i as u64 * ChunkTerrainData::CHUNK_TERRAIN_DATA_SIZE));
-                let terrain_data = ChunkTerrainData::from_reader(terrain_datat_reader).unwrap();
+                terrain_data_reader.seek(SeekFrom::Start(i as u64 * ChunkTerrainData::CHUNK_TERRAIN_DATA_SIZE));
+                let terrain_data = ChunkTerrainData::from_reader(terrain_data_reader).unwrap();
 
                 self.terrain_chunk_cache.put(i as u32, terrain_data);
             }
@@ -475,9 +598,8 @@ pub struct Planet{
     pub regions: [Region; 6],
     pub regions_share: RegionsShareInfo,
 
-    
-    ron_file: std::fs::File,
-    terrain_data_file: std::fs::File,
+    pub plots_side_num: u32,
+    pub mesh_grid_segment_num: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -488,6 +610,7 @@ pub struct PlanetDescriptor{
     pub position: Vec3<f32>,
     pub rotation: Quaternion<f32>,
     pub mesh_grid_segment_num: u32,
+    
 }
 
 impl PlanetDescriptor{
@@ -500,266 +623,82 @@ impl PlanetDescriptor{
 
 
 
-
 impl Planet{
     const POOL_MAX: u32 = 10000;
-
-    pub fn build(desc: &PlanetDescriptor, world_dir: std::path::PathBuf) -> Result<(), std::io::Error>{
-        let ron_file_path = world_dir.join(desc.name).with_extension("ron");
-        let ron_file = utils::create_new_file(ron_file_path)?;
-        let mut ron_writer = std::io::BufWriter::new(ron_file);
-        ron_writer.write_all(ron::ser::to_string(&desc).unwrap().as_bytes())?;
-        let ron_file = ron_writer.into_inner().unwrap();
-
-        let terrain_data_file_path = world_dir.join(desc.name).with_extension("terrain");
-        let terrain_data_file = utils::create_new_file(terrain_data_file_path)?;
-        let mut terrain_data_writer = std::io::BufWriter::new(terrain_data_file);
+    
+    pub fn build(planet_desc: &PlanetDescriptor, planet_dir: std::path::PathBuf) -> Result<(), std::io::Error>{
         
-        {//create terrain data
+        {//descriptor ron file
+            let ron_file_path = planet_dir.join(planet_desc.name).with_extension("ron");
+            let ron_file = utils::create_new_file(ron_file_path)?;
+            let mut ron_writer = std::io::BufWriter::new(ron_file);
+            ron_writer.write_all(ron::ser::to_string(&planet_desc).unwrap().as_bytes())?;
+        }
 
-            let info = RegionsShareInfo::new(desc.lod_level);
+        
+        
 
+        {//build regions
+            use noise::{NoiseFn, Perlin, Seedable};
+
+            let perlin_noise = Perlin::new(1);
+            let noise_func = |pos: &[f32; 3]| ->(f32, [f32; 3]) {
+                let pos_f64 = pos.map(|s| s as f64);
+                let elevation = perlin_noise.get(pos_f64);
+                
+                let pos = Vec3::<f32>::from(*pos);
+                let normal = pos.normalized().into_array();
+                (elevation as f32, normal)
+            };
+            let info = RegionsShareInfo::new(planet_desc.lod_level);
+            let plot_side_num = planet_desc.calc_plots_side_num();
             for ri in 0..6{
-                let plot_terrain 
+                let axis = math::AxisNormal::from_u32(ri);
+                Region::build(axis, planet_desc, noise_func, planet_dir.clone());
+
+                
             }
         };
         
-
+        Ok(())
     }
-    
-    ///create new planet and save
-    /// save directory structure:
-    /// world_path/
-    ///     planet_name/
-    ///         planet_name.ron
-    ///         planet_name.terrain
-    pub fn new(desc: &PlanetDescriptor, world_dir: std::path::PathBuf) -> Result<Self, std::io::Error>{
 
-        let ron_file_path = world_dir.join(desc.name).with_extension("ron");
-        let ron_file = utils::create_new_file(ron_file_path)?;
-        let mut ron_writer = std::io::BufWriter::new(ron_file);
-        ron_writer.write_all(ron::ser::to_string(&desc).unwrap().as_bytes())?;
-        let ron_file = ron_writer.into_inner().unwrap();
-
-        let terrain_data_file_path = world_dir.join(desc.name).with_extension("terrain");
-        let terrain_data_file = utils::create_new_file(terrain_data_file_path)?;
-        let mut terrain_data_writer = std::io::BufWriter::new(terrain_data_file);
-
-
-
-        let rotation: Quaternion<f32> = Quaternion::<f32>::identity();
-        let region_chunks_num = 4u32.pow(desc.lod_level as u32 +1) -1;
-        let region_plot_num = 4u32.pow(desc.lod_level as u32);
-        let region_side_plot_num = 2u32.pow(desc.lod_level as u32);
+    pub fn load_from_dir(planet_dir: std::path::PathBuf, planet_name: utils::Name) -> Result<Self, std::io::Error>{
+        //load descriptor from  exsited ron file
         
-        //generate terrain chunks head and save chunk data to file
-        let mut terrain_chunk_heads: [Vec<ChunkInfo>; 6] = Default::default();
 
-        for (face_index, &axis) in math::AxisNormal::AXIS_ARRAY.iter().enumerate()  {
-            let mut level_left_index = 1;
-            let mut subdivision = 1;
-            let mut depth = 0;
-            let mut detail_value = 2.0f32.powi(depth as i32 - desc.lod_level as i32);
-
-            let mut chunk_heads: Vec<ChunkInfo> = Vec::new();
-
-            for i in 0..region_chunks_num {
-                if i >= level_left_index{
-                    level_left_index = 4*level_left_index + 1;
-                    depth += 1;
-                    detail_value *= 2.0;
-                    subdivision *= 2;
-                }
-
-                let level_index = i - level_left_index;
-
-                let (xi, yi) = (level_index % subdivision , level_index / subdivision);
-            
-                //unit cube
-                
-                let d: f32 =  2.0 / subdivision as f32;
-                let start = [
-                    -1.0 + (xi as f32) * d,
-                    -1.0 + (yi as f32) * d
-                ].into();
-                let size: f32 = 2.0/subdivision as f32;
-                let offset: f32 = 1.0;
-                
-                let mut mesh = mesh::Mesh::create_axis_normal_terrain_plane(
-                    axis, start, size, offset, CHUNK_MESH_SUBDIVISIONS);
-
-                //spherelize
-                for vertex in mesh.vertices.iter_mut() {
-                    let p = Vec3::<f32>::from(vertex.pos)
-                    .map(|s|{ (s*std::f32::consts::PI / 4.0).tan()})
-                    .normalized();
-                    
-                    vertex.normal = p.into_array();
-                    vertex.pos = (p * desc.radius).into_array();
-                }
-                
-                
-                let terrain_chunk = ChunkTerrainData{
-                    mesh
-                };
-                //write terrain chunk
-                terrain_chunk.to_writer(&mut terrain_data_writer).unwrap();
-
-                let raw_corners = mesh::QUAD_CORNERS.map(|(x, y)|{
-                    let xy = [x, y].map(|s| (s+1.0)/2.0 * d);
-                    let c = [xy[0]+ start.x, xy[1]+start.y];
-                    c
-                });
-
-                let corners = raw_corners.map(|[x, y]|{
-                    let c = (Vec3::<f32>::from(axis.normal()) + Vec3::from(axis.tangent())*x + Vec3::from(axis.btangent())*y)
-                    .map(|s| (s*std::f32::consts::PI / 4.0).tan()).normalized() * desc.radius;
-                    c.into_array()
-                });
-
-                let chunk_head =  ChunkInfo{
-                    depth,
-                    index: i,
-                    axis_normal: axis,
-                    detail_value,
-                    raw_corners,
-                    corners,
-                    subdivision,
-                };
-
-                chunk_heads.push(chunk_head);
-            }
-
-
-            terrain_chunk_heads[face_index] = chunk_heads;
-            
-        }
-
-        let plot_positions = {
-            let mut plot_pos: [Vec<Vec3<f32>>; 6] = math::AxisNormal::AXIS_ARRAY.map(|i| vec![Vec3::<f32>::zero(); region_plot_num as usize]);
-
-            //fill plot pos array 
-            for axis in math::AxisNormal::AXIS_ARRAY{
-                for yi in 0..region_side_plot_num {
-                    for xi in 0..region_side_plot_num{
-                        let plot_index = yi * region_side_plot_num + xi;
-                        
-                        let pos = axis.mat3() * Vec3::new(
-                            -1.0 + (xi as f32 + 0.5) * 2.0 / region_side_plot_num as f32,
-                            -1.0 + (yi as f32 + 0.5) * 2.0 / region_side_plot_num as f32,
-                            1.0
-                        );
-                        
-                        //cobe wrap pos
-                        let mut pos = pos.into_array();
-                        math::cobe_wrap_with_axis(&mut pos, axis);
-                        let pos = Vec3::<f32>::from(pos).normalized() * desc.radius;
-
-                        plot_pos[axis.index()][plot_index as usize] = pos;
-
-                    }
-                }
-            }
-            plot_pos
+        let planet_desc: PlanetDescriptor = {
+            let ron_file_path = planet_dir.join(planet_name.as_str()).with_extension("ron");
+            let ron_file = fs::File::open(ron_file_path).unwrap();
+            let mut ron_reader = std::io::BufReader::new(ron_file);
+            ron::de::from_reader(&mut ron_reader).unwrap()
         };
 
-        let mut plot_details: [Vec<f32>; 6] = math::AxisNormal::AXIS_ARRAY.map(|i| vec![0.0; region_plot_num as usize]);
+        let region_share = RegionsShareInfo::new(planet_desc.lod_level);
 
         
-        
-        
+        //load regions
+        let mut regions = math::AxisNormal::AXIS_ARRAY.map(|axis| {
+            Region::load_from_dir(axis, planet_dir.clone(), &region_share, &planet_desc).unwrap()
+        });
 
-        
+        let plot_side_num = planet_desc.calc_plots_side_num();
 
-        let terrain_chunk_cache = RefCell::new( lru::LruCache::new(std::num::NonZeroUsize::new(Self::POOL_MAX as usize).unwrap()));
+        Ok(Self{
+            name: planet_name,
+            radius: planet_desc.radius,
+            lod_level: planet_desc.lod_level,
+            position: planet_desc.position,
+            rotation: planet_desc.rotation,
+            regions: regions,
+            regions_share: region_share,
+            plots_side_num: plot_side_num,
+            mesh_grid_segment_num: planet_desc.mesh_grid_segment_num,
+        })
 
-        let terrain_data_file = terrain_data_writer.into_inner().unwrap();
-        Ok(
-            Self{
-                name: desc.name.clone(),
-                position: desc.position,
-                terrain_chunk_heads,
-                rotation,
-                radius: desc.radius,
-                lod_trees,
-                lod_level:desc.lod_level,
-                terrain_chunk_cache,
-                
-
-
-                ron_file,
-                terrain_data_file,
-            }
-        )
     }
-
     
-    pub fn load_chunk_data(&self, tree_index: usize, chunk_index: usize) -> Result<ChunkTerrainData, std::io::Error>{
-        let mut reader = std::io::BufReader::new(&self.terrain_data_file);
-        let chunks_num_per_face = self.terrain_chunk_heads[tree_index].len();
-        let data_index = tree_index * chunks_num_per_face + chunk_index;
-        reader.seek(std::io::SeekFrom::Start(data_index as u64 * CHUNK_MESH_DATA_BYTE_NUM as u64));
-        ChunkTerrainData::from_reader(&mut reader)
-        
-    }
-
-    pub fn update(&mut self, delta_time: f32,  camera: &camera::Camera){
-        self.update_lod_trees(camera);
-
-
-    }
-
-
-    pub fn update_lod_trees(&mut self, camera: &camera::Camera){
-        for (index ,tree) in self.lod_trees.iter_mut().enumerate() {
-
-            let mut stack: Vec<&mut ChunkNode> = vec![];
-            stack.push(&mut tree.root);
-            while let Some(node) = stack.pop() {// dfs lod tree
-                let terrain_chunk_head = &self.terrain_chunk_heads[index as usize][node.terrain_chunk_index as usize];
-                let detail_value = terrain_chunk_head.detail_value;
-                let calc_detail = terrain_chunk_head.calc_detail(camera, self.position);
-
-
-
-                if calc_detail >= detail_value{
-                    let temp = &mut node.children;
-                    match temp {
-                        Some(children) => {
-                            for child in children.iter_mut() {
-                                stack.push(child);
-                            }
-                            
-                        }
-                        None => {
-                            let children:[Box<ChunkNode>; 4] = [0, 1, 2, 3].map(|i| {
-                                let chunk_node = ChunkNode{
-                                    terrain_chunk_index: 4 * node.terrain_chunk_index + i + 1, 
-                                    children: None,
-                                };
-                                Box::new(chunk_node)
-                            });
-                            //add stack
-                            std::mem::replace(temp, Some(children));
-                            
-                            for child in temp.as_mut().unwrap().iter_mut() {
-                                stack.push(child);
-                            }
-                            
-                        }
-                    }
-                }
-                else {
-                    if node.children.is_some() {
-                        node.children = None;
-                    }
-                    
-                }
-            }
-        }
-        
-    }
-
+    
     pub fn description(&self) ->PlanetDescriptor {
         PlanetDescriptor{
             name: self.name.clone(),
@@ -767,13 +706,16 @@ impl Planet{
             radius: self.radius,
             lod_level: self.lod_level,
             rotation: self.rotation,
+            mesh_grid_segment_num: self.mesh_grid_segment_num,
         }
     }
 
+    pub fn update(&mut self, delta_time: f32, camera: &camera::Camera){
+        //todo!()
+    }
+
     pub fn save(&self) {
-        let mut writer = std::io::BufWriter::new(&self.ron_file);
-        let desc = self.description();
-        ron::ser::to_writer_pretty(&mut writer, &desc, ron::ser::PrettyConfig::default()).unwrap();
+        todo!()
     }
  
   
@@ -781,3 +723,34 @@ impl Planet{
 
 
 
+
+//test
+#[cfg(test)]
+mod test{
+    use super::*;
+    use crate::utils;
+    use crate::math;
+    use crate::mesh;
+    use crate::camera;
+
+    #[test]
+    fn test_planet_build(){
+        let planet_desc = PlanetDescriptor{
+            name: utils::Name::new("AA"),
+            radius: 100.0,
+            lod_level: 4,
+            position: Vec3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::identity(),
+            mesh_grid_segment_num: 16,
+        };
+        let planet_dir = std::path::PathBuf::from("test/planet/AA");
+        //create planet dir if not exsited
+        if !planet_dir.exists(){
+            fs::create_dir_all(&planet_dir).unwrap();
+        }
+
+        
+        Planet::build(&planet_desc, planet_dir).unwrap();
+    }
+
+}

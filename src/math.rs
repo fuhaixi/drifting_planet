@@ -1,6 +1,6 @@
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AxisNormal{
     X = 0,
     Y = 1,
@@ -8,6 +8,20 @@ pub enum AxisNormal{
     Mx = 3,
     My = 4,
     Mz = 5
+}
+//impl display for AxisNormal
+use std::fmt;
+impl fmt::Display for AxisNormal {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AxisNormal::X => write!(f, "X"),
+            AxisNormal::Y => write!(f, "Y"),
+            AxisNormal::Z => write!(f, "Z"),
+            AxisNormal::Mx => write!(f, "mX"),
+            AxisNormal::My => write!(f, "mY"),
+            AxisNormal::Mz => write!(f, "mZ"),
+        }
+    }
 }
 
 

@@ -11,7 +11,7 @@ fn main() {
     match cmd {
         cli::Command::New(config_file) => {
             
-            drifting_planet::new_planet(config_file, path).unwrap();
+            drifting_planet::build_planet(config_file, path).unwrap();
         }
         
         cli::Command::View(planet_name) => {

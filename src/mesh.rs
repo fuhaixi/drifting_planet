@@ -284,7 +284,7 @@ impl Mesh{
 
         Self{
             vertices,
-            indices: triangles.1,
+            indices: triangles.1.clone(),
         }
     }
 }
@@ -376,6 +376,29 @@ impl Triangles{
         }
 
         Self(pos_arr, indices)
+    }
+
+    pub fn create_grid_points_on_unit_cube(index_x: u32, index_y: u32, axis: AxisNormal, segment_num: u32, grid_segment_num: u32) -> Vec<[f32; 3]>{
+        let point_num = 1 + grid_segment_num;
+
+        let size = 2.0 / (segment_num  as f32);
+        let grid_cell_size = size / (grid_segment_num as f32);
+        
+        let mut pos_arr: Vec<[f32; 3]> = vec![[0.0; 3]; point_num.pow(2) as usize];
+        let start_point =  Vec3::<f32>::new(index_x as f32 * size - 1.0, index_y as f32 * size -1.0, 1.0);
+        let mat3 =  Mat3::from_col_arrays(axis.mat3_col_arrays());
+        for yi in 0..point_num{
+            for xi in 0..point_num{//loop each vertex
+                let dx = xi as f32 * grid_cell_size;
+                let dy = yi as f32 * grid_cell_size;
+                let point: Vec3<f32> = start_point + [dx, dy, 0.0];
+                pos_arr[(yi * point_num + xi) as usize] = (mat3 * point).into_array();
+                
+            }
+        };
+
+        pos_arr
+
     }
 
     // order z axis

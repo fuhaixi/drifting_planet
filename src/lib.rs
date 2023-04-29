@@ -7,6 +7,7 @@ mod texture;
 mod planet;
 mod utils;
 mod math;
+mod user;
 use std::path;
 use utils::Name;
 use vek::*;
@@ -125,7 +126,7 @@ impl CameraOrbitController{
 }
 
 
-pub fn new_planet(config_file: std::fs::File, save_dir_path: path::PathBuf) -> Result<(), std::io::Error> {
+pub fn build_planet(config_file: std::fs::File, save_dir_path: path::PathBuf) -> Result<(), std::io::Error> {
     let planet_desc: planet::PlanetDescriptor = ron::de::from_reader(config_file).unwrap();
     //check if planet already exists
     let planet_dir_path = save_dir_path.join(&planet_desc.name);
@@ -133,7 +134,8 @@ pub fn new_planet(config_file: std::fs::File, save_dir_path: path::PathBuf) -> R
         return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "planet already exists"));
     }
 
-    let _planet = planet::Planet::new(&planet_desc, save_dir_path).unwrap();
+    planet::Planet::build(&planet_desc, save_dir_path).unwrap();
+    
     Ok(())
 }
 

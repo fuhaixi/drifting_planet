@@ -39,28 +39,35 @@ impl Name{
 
 
 use vek::*;
+#[derive(serde::Serialize, serde::Deserialize) ]
 pub struct Grid<T>{
     pub extent: Extent2<u32>,
     pub data: Vec<T>,
 }
 
 impl<T> Grid<T> where T: Clone{
-    pub fn new(extent: Extent2<u32>, data: Vec<T>) -> Self{
-        Self{extent, data}
-    }
-
     pub fn new_with_default(extent: Extent2<u32>, default: T) -> Self{
         let data = std::iter::repeat(default).take((extent.w * extent.h) as usize).collect::<Vec<_>>();
         Self{extent, data}
     }
 
+    pub fn new_square_with_default(side_num: u32, default: T) -> Self{
+        Self::new_with_default(Extent2::new(side_num, side_num), default)
+    }
+}
+
+impl<T> Grid<T>{
+    pub fn new(extent: Extent2<u32>, data: Vec<T>) -> Self{
+        Self{extent, data}
+    }
+
+   
+
     pub fn new_square(side_num: u32, data: Vec<T>) -> Self{
         Self::new(Extent2::new(side_num, side_num), data)
     }
 
-    pub fn new_square_with_default(side_num: u32, default: T) -> Self{
-        Self::new_with_default(Extent2::new(side_num, side_num), default)
-    }
+   
 
     pub fn get(&self, pos: Vec2<u32>) -> Option<&T>{
         let index = self.get_index(pos);
@@ -88,11 +95,19 @@ impl<T> Grid<T> where T: Clone{
         let data = self.data.iter().map(f).collect::<Vec<_>>();
         Grid::new(self.extent, data)
     }
+
+    pub fn len(&self) -> usize{
+        self.data.len()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<T>{
+        self.data.iter()
+    }
 }
 
-impl<T> Grid<T> where T: std::ops::Mul<f32, Output = T> + std::ops::Add<T, Output =  T> + Clone{
+impl Grid<f32>{
     
-    pub fn bilinear_sample(&self, uv: Vec2<f32>) -> T {
+    pub fn bilinear_sample(&self, uv: Vec2<f32>) -> f32 {
         let x = uv.x * self.extent.w as f32;
         let y = uv.y * self.extent.h as f32;
 
@@ -121,14 +136,8 @@ impl<T> Grid<T> where T: std::ops::Mul<f32, Output = T> + std::ops::Add<T, Outpu
         ret
     }
 
-    pub fn len(&self) -> usize{
-        self.data.len()
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<T>{
-        self.data.iter()
-    }
-
+  
+    
 }
 
 //implement iter() for grid
@@ -224,6 +233,10 @@ pub fn create_new_file<P>(path: P) -> Result<std::fs::File, std::io::Error> wher
         Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "file already exists"))
     }
 }
+
+// pub fn noise(p: Vec3<f32>) -> (f32, Vec3<f32>){
+
+// }
 
 
 #[cfg(test)]

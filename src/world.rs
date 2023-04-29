@@ -11,6 +11,22 @@ use crate::utils::Name;
 
 use serde::{Serialize, Deserialize};
 
+pub struct WorldAgent{
+    
+}
+
+impl WorldAgent{
+    pub fn load_from_dir(world_dir: std::path::PathBuf){
+        
+    }
+
+    pub fn init_wolrd(dir: std::path::PathBuf, world_name: Name, seed: u32){
+        
+    }
+
+    
+}
+
 pub struct World{
     pub dir_path: std::path::PathBuf,
     pub name: Name,
@@ -80,26 +96,6 @@ impl World{
 
     }
     
-    pub fn create_planet(&mut self, planet_desc: &planet::PlanetDescriptor) -> Result<(), &'static str>{
-        //name should be unique
-        for planet in self.planets.iter(){
-            if planet.name == planet_desc.name{
-                return Err("Planet name already exists!");
-            }
-        }
-
-        if self.planets.len() >= Self::MAX_PLANETS{
-            return Err("Max planets reached!");
-        }
-
-        let planet = match planet::Planet::new(planet_desc, self.dir_path.clone()){
-            Ok(planet) => planet,
-            Err(e) => return Err("Error creating planet!")
-        };
-
-        self.planets.push(planet);
-        Ok(())
-    }
 
     pub fn describe(&self) -> WorldDescriptor{
         WorldDescriptor{
