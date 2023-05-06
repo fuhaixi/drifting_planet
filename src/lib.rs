@@ -158,7 +158,8 @@ pub fn init_world(save_dir_path: path::PathBuf) -> Result<(), std::io::Error> {
     let world_desc = world::WorldDescriptor{
         name: utils::Name::new("new world"),
     };
-    let _world = world::World::new(&world_desc, save_dir_path).unwrap();
+    let world_path = save_dir_path.join(&world_desc.name);
+    world::World::build(&world_desc, world_path).unwrap();
     Ok(())
 }
 
@@ -171,18 +172,20 @@ struct State{
     camera_controller: CameraOrbitController,
 
     cube: mesh::Triangles,
+    freeze_mode : bool,
     cube_state: mesh::TrianglesState,
     cube_render_pipeline: wgpu::RenderPipeline,
+    world_dir_path: path::PathBuf,
 }
 
 impl State {
-    pub fn new(gpu_agent: gpu::GpuAgent, world: world::World) -> Self{
+    pub fn new(gpu_agent: gpu::GpuAgent, world: world::World, world_dir_path: path::PathBuf) -> Self{
         let world_state = world::WorldState::new(&gpu_agent, &world);
         let camera = camera::Camera::new( [0.0, 0.0, 5.0].into(), [0.0, 0.0, 0.0].into(), Vec3::unit_y(), camera::Projection{
             aspect: gpu_agent.surface_aspect(),
             fovy: PI/4.0,
             znear: 0.1,
-            zfar: 100.0,
+            zfar: 200.0,
         });
         let camera_controller = CameraOrbitController::new([0.0, 0.0, 0.0].into(), 10.0);
 
@@ -206,6 +209,9 @@ impl State {
             "cube render pipeline"
         );
 
+        
+
+
         Self{
             gpu_agent,
             world,
@@ -215,16 +221,49 @@ impl State {
             cube,
             cube_state,
             cube_render_pipeline,
+            freeze_mode:false,
+            world_dir_path,
         }
     }
 
     pub fn input(&mut self, event: &WindowEvent){
         self.camera_controller.input(event);
+
+        //if press b print camera position
+        if let WindowEvent::KeyboardInput { input, .. } = event {
+            if let Some(key_code) = input.virtual_keycode {
+                if input.state == ElementState::Pressed {
+                    if key_code == VirtualKeyCode::B {
+                        println!("camera position: {:?}", self.camera.eye);
+                        //camera controller radius
+                        println!("camera controller radius: {}", self.camera_controller.orbit_radius);
+                    }
+                    if key_code == VirtualKeyCode::F {
+                        self.freeze_mode = !self.freeze_mode;
+                    }
+                }
+            }
+        }
     }
 
     pub fn update(&mut self, delta_time: f32){
         self.camera_controller.update_camera(&mut self.camera, delta_time);
         self.camera.update();
+
+        if !self.freeze_mode{
+
+            self.world.update(delta_time, &self.camera);
+        }
+        self.world_state.update_visible_planets_state(&self.world, &self.gpu_agent);
+    }
+
+    pub fn focus(&mut self, planet_name: &Name){
+        let planet_desc= self.world.planets.iter().find(|p| p.name == *planet_name).unwrap();
+        self.camera_controller.center = planet_desc.position;
+        self.camera_controller.orbit_radius = planet_desc.radius * 2.0;
+
+        self.world.focus_on_planet(planet_name, &self.world_dir_path);
+        self.world_state.set_visible_planets_state(&self.world, &self.gpu_agent);
     }
 
     pub fn render(&mut self, delta_time: f32) -> Result<(), wgpu::SurfaceError>{
@@ -267,6 +306,7 @@ impl State {
 
             self.world_state.render_back(&mut render_pass, &self.camera);
             // self.world_state.render_sun(&mut render_pass, &self.camera);
+            self.world_state.render_visible_planets( &mut render_pass, &self.camera, &self.world);
 
             //render cube
             self.render_cube(&mut render_pass);
@@ -280,7 +320,7 @@ impl State {
   
     }
 
-    fn render_cube<'a: 'b, 'b>(&'a self, render_pass: & mut wgpu::RenderPass<'b>){
+    fn render_cube<'a>(&'a self, render_pass: & mut wgpu::RenderPass<'a>){
         render_pass.set_pipeline(&self.cube_render_pipeline);
         render_pass.set_vertex_buffer(0, self.cube_state.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.cube_state.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -306,18 +346,25 @@ impl State {
 
 }
 
-pub async fn run(save_dir_path: path::PathBuf){
+pub async fn run_with_string(save_dir_path: path::PathBuf, focus_planet: Option<String>, world_name: &str,){
+    let focus_planet = focus_planet.map(|s| Name::new(&s));
+    run(save_dir_path, world_name, focus_planet).await;
+}
+
+pub async fn run(save_dir_path: path::PathBuf, world_name: &str, focus_planet: Option<Name>,){
     env_logger::init();
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let gpu_agent = gpu::GpuAgent::new(window).await;
 
-    let world_desc = world::WorldDescriptor{
-        name: Name::new("new_world"),
-    };
-    let world = world::World::new(&world_desc, std::path::PathBuf::from(save_dir_path)).unwrap();
+    let world_dir_path = save_dir_path.join(world_name);
+    let world = world::World::load_from_dir( world_dir_path.clone()).unwrap();
 
-   let mut state = State::new(gpu_agent, world);
+    let mut state = State::new(gpu_agent, world, world_dir_path.clone());
+
+    if let Some(planet_name) = focus_planet{
+        state.focus(&planet_name);
+    }
 
     
     let mut last_time = std::time::Instant::now();
@@ -368,6 +415,55 @@ pub async fn run(save_dir_path: path::PathBuf){
 
     });
     
+}
+
+#[cfg(test)]
+mod test{
+    use  super::*;
+    #[test]
+    fn _run(){
+        let save_dir_path = path::PathBuf::from("test/save");
+        if !save_dir_path.exists(){
+            fs::create_dir_all(&save_dir_path).unwrap();
+        }
+
+        pollster::block_on(run(save_dir_path, "world_A", Some(Name::new("AA"))));
+
+    }
+
+    #[test]
+    fn _build_world(){
+        let save_dir_path = path::PathBuf::from("test/save");
+        let world_dir_path =save_dir_path.join("world_A");
+        if !world_dir_path.exists(){
+            fs::create_dir_all(&world_dir_path).unwrap();
+        }
+
+        let world_desc = world::WorldDescriptor{
+            name: Name::new("world_A"),
+        };
+
+        let planet_desc = planet::PlanetDescriptor{
+            name: utils::Name::new("AA"),
+            radius: 100.0,
+            lod_level: 4,
+            position: Vec3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::identity(),
+            mesh_grid_segment_num: 8,
+            seed: 0,
+            terrain_elevation_bounds: (-3.0, 3.0),
+        };
+
+        let planet_dir = world_dir_path.join("AA");
+        if !planet_dir.exists(){
+            fs::create_dir_all(&planet_dir).unwrap();
+        }
+
+        planet::Planet::build(&planet_desc, planet_dir).unwrap();
+
+
+        world::World::build(&world_desc, world_dir_path).unwrap();
+    }
 }
 
 

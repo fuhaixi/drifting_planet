@@ -178,6 +178,7 @@ impl VertexLayout for TransformInstance {
 }
 
 impl TcInstance{
+    #[allow(dead_code)]
     pub fn from_position_rgb(position: [f32; 3], rgb: [f32; 3]) -> Self{
         Self{
             translation: [position[0], position[1], position[2], 1.0],
@@ -240,7 +241,15 @@ impl TrianglesState{
 
 
 impl Mesh{
+    #[allow(dead_code)]
+    pub fn empty() -> Self{
+        Self{
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        }
+    }
    
+    #[allow(dead_code)]
     pub fn create_axis_normal_terrain_plane(
             axis: AxisNormal,
             start: Vec2<f32>,
@@ -271,6 +280,7 @@ impl Mesh{
         
     }
 
+    #[allow(dead_code)]
     pub fn from_triangles(triangles: &Triangles) -> Self{
         let len :u32 = triangles.0.len() as u32;
   
@@ -286,6 +296,34 @@ impl Mesh{
             vertices,
             indices: triangles.1.clone(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn save_obj_file(&self, path: std::path::PathBuf){
+        use std::io::Write;
+        let mut file = std::fs::File::create(path).unwrap();
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for v in &self.vertices{
+            vertices.push(format!("v {} {} {}", v.pos[0], v.pos[1], v.pos[2]));
+            vertices.push(format!("vn {} {} {}", v.normal[0], v.normal[1], v.normal[2]));
+            vertices.push(format!("vt {} {}", v.tex_coord[0], v.tex_coord[1]));
+        }
+        for i in (0..self.indices.len()).step_by(3){
+            indices.push(format!("f {} {} {}", self.indices[i+0]+1, self.indices[i+1]+1, self.indices[i+2]+1));
+        }
+        let mut lines = Vec::new();
+        lines.append(&mut vertices);
+        lines.append(&mut indices);
+        let lines = lines.join("\n");
+        file.write_all(lines.as_bytes()).unwrap();
+    }
+
+    #[allow(dead_code)]
+    pub fn merge(&mut self, other: &Self){
+        let len = self.vertices.len();
+        self.vertices.extend_from_slice(&other.vertices);
+        self.indices.extend_from_slice(&other.indices.iter().map(|i| i + len as u32).collect::<Vec<u32>>());
     }
 }
 
@@ -455,6 +493,7 @@ impl Triangles{
         }
     }
 
+    #[allow(dead_code)]
     pub fn merged(&self, other: &Self) -> Self{
         let mut pos_arr = self.0.clone();
         let mut indices = self.1.clone();
@@ -464,6 +503,7 @@ impl Triangles{
         Self(pos_arr, indices)
     }
 
+    #[allow(dead_code)]
     pub fn merge(&mut self, other: &Self){
         let offset = self.0.len() as u32;
         self.0.append(&mut other.0.clone());
@@ -494,17 +534,7 @@ mod tests {
     }
 
 
-    #[test]
-    fn test_cobe_wrap(){
-        let mut terrain = Triangles::create_axis_normal_terrain_plane(AxisNormal::Y, Vec2::zero()-1.0, 2.0, 0.0, 2);
-        for pos in terrain.0.iter_mut(){
-
-            let x = Vec2::new(pos[0], pos[2]);
-            
-            
-            
-        }
-    }
+    
 
     #[test]
     fn test_planet_gen(){

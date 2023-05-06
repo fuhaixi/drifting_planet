@@ -56,6 +56,10 @@ impl Camera{
         range: 0..std::mem::size_of::<ViewProj>() as u32,
     };
 
+    pub fn size_of_push_constant() -> u32{
+        std::mem::size_of::<ViewProj>() as u32
+    }
+
     pub fn new(eye: Vec3<f32>, target: Vec3<f32>, up: Vec3<f32>, projection: Projection) -> Self{
         Self{
             eye,

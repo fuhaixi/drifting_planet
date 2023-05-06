@@ -122,6 +122,14 @@ pub fn cobe_wrap_with_axis(vec:&mut [f32; 3], axis: AxisNormal){
     
 }
 
+/// bilinear interpolation
+pub fn bilinear_interpolation<T> (g00: T, g01: T, g10: T, g11: T, t: Vec2<f32>) -> T where T: std::ops::Mul<f32, Output = T> + std::ops::Add<Output = T> + Copy {
+    let a = g00 * (1.0 - t[0]) + g10 * t[0];
+    let b = g01 * (1.0 - t[0]) + g11 * t[0];
+    a * (1.0 - t[1]) + b * t[1]
+}
+
+
 #[cfg(test)]
 mod test{
     use super::*;

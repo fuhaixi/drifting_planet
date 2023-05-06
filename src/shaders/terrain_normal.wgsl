@@ -1,6 +1,8 @@
-struct CameraUniform {
-	view_proj: mat4x4<f32>,
+struct ViewProj {
+	view: mat4x4<f32>,
+    proj: mat4x4<f32>,
 }
+
 
 struct VertexInput {
 	@location(0) position: vec3<f32>,
@@ -18,13 +20,14 @@ struct InstanceInput {
 
 
 
-struct Light {
-	position: vec3<f32>,
+struct SunLight {
+	dir: vec3<f32>,
 	color: vec3<f32>,
 }
 
-@group(2) @binding(0)
-var<uniform> light: Light;
+@group(0) @binding(0)
+var<uniform> light: SunLight;
+
 
 struct VertexOutput {
 	@builtin(position) clip_position: vec4<f32>,
@@ -33,8 +36,10 @@ struct VertexOutput {
 	@location(2) world_position: vec3<f32>,
 }
 
-@group(1) @binding(0)
-var<uniform> camera: CameraUniform;
+
+
+var<push_constant> view_proj: ViewProj;
+
 
 @vertex
 fn vs_main(model: VertexInput, instance: InstanceInput ) -> VertexOutput {
@@ -48,24 +53,21 @@ fn vs_main(model: VertexInput, instance: InstanceInput ) -> VertexOutput {
 	var out: VertexOutput;
 	out.tex_coords = model.tex_coords;
 	let world_position = model_matrix *vec4<f32>(model.position, 1.0);
-	out.clip_position = camera.view_proj * world_position;
+	out.clip_position = view_proj.proj * view_proj.view * world_position;
 	out.world_position = world_position.xyz;
 	out.world_normal = (model_matrix * vec4<f32>(model.normal, 0.0)).xyz;
 	return out;
 }
 
-@group(0) @binding(0)
-var t_diffuse: texture_2d<f32>;
-@group(0) @binding(1)
-var s_diffuse: sampler;
+
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-	let obj_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+	let obj_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
 	let ambient_strength = 0.1;
 	let ambient_light =  light.color * ambient_strength;
 	
-	let L = normalize(light.position - in.world_position);
+	let L = light.dir;
 	let N = in.world_normal;
 	let diffuse_light = max(dot(L, N), 0.0) * light.color;
 
