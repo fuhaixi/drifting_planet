@@ -104,7 +104,7 @@ impl CameraOrbitController{
         self.pitch += self.pitch_input * self.orbit_speed * delta_time;
 
 
-        self.pitch = self.pitch.clamp(-PI/2.0, PI/2.0);
+        self.pitch = self.pitch.clamp(-PI/2.0 + 0.001, PI/2.0 - 0.001);
 
         // println!("yaw_input: {}, pitch_input: {}", self.yaw_input, self.pitch_input);
         // println!("yaw: {}, pitch: {}", self.yaw, self.pitch);
