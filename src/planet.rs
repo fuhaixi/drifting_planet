@@ -1,4 +1,5 @@
 
+use std::f32::consts::PI;
 use std::fs;
 use std::io::SeekFrom;
 use crate::camera;
@@ -7,7 +8,9 @@ use crate::math;
 
 use crate::texture;
 use crate::utils;
+use bincode::de;
 use serde::{Serialize, Deserialize};
+use vek::num_traits::Pow;
 use crate::gpu;
 use crate::mesh;
 use vek::*;
@@ -33,25 +36,7 @@ pub struct PlotInfo{
 
 
 
-impl ChunkInfo{
-    pub fn calc_detail(&self, camera: &camera::Camera, center: Vec3<f32>) -> f32{
-        self.corners.map(|pos|{
-            let position = Vec3::from(pos);
-            let normal: Vec3<f32> = position - center;
-            let (dotre, distance) = camera.ray_dot(position, normal);
-            let detail_value = if dotre < 0.0{
-                0.0f32
-            } else{
-                
-                dotre * 1.0 / (1.0 + distance)
-            };
-            detail_value
-        }).iter().fold(f32::MIN, |max, x|max.max(*x))
-    }
 
-  
-    
-}
 
 
 
@@ -138,12 +123,20 @@ impl ChunkTerrainData{
             for xi in 0..chunk_side_point_num{
                 let index = xi + yi * chunk_side_point_num;
                 let position = triangles.0[index as usize];
-                let chunk_uv = Vec2::<f32>::new(xi as f32 / chunk_side_point_num as f32, yi as f32 / chunk_side_point_num as f32);
+                let chunk_uv = Vec2::<f32>::new(xi as f32 / (chunk_side_point_num -1 ) as f32, yi as f32 / (chunk_side_point_num -1 ) as f32);
                 
                 let xy = axis.get_xy(&position);
                 let region_uv:Vec2<f32> = xy.map(|s| (s + 1.0)/2.0).into();
                 
                 let (elevation, normal) = Self::sample_on_grid_plot(plot_grid, region_uv);
+                let tangent =  
+
+                let (elevation_x0, _) = Self::sample_on_grid_plot(plot_grid, region_uv - Vec2::new(0.01, 0.0));
+                let (elevation_x1, _) = Self::sample_on_grid_plot(plot_grid, region_uv + Vec2::new(0.01, 0.0));
+                let (elevation_y0, _) = Self::sample_on_grid_plot(plot_grid, region_uv - Vec2::new(0.0, 0.01));
+                let (elevation_y1, _) = Self::sample_on_grid_plot(plot_grid, region_uv + Vec2::new(0.0, 0.01));
+
+                
                 
                 let position = Vec3::<f32>::from(position).normalized() * (planet_desc.radius + elevation);
                 
@@ -157,6 +150,9 @@ impl ChunkTerrainData{
             }
         };
 
+        //normal
+
+        
 
         Self { mesh: mesh::Mesh { vertices, indices:triangles.1 } }
 
@@ -281,6 +277,12 @@ impl PlotTerrainData{
         }
     }
 
+    pub fn calc_byte_size(mesh_grid_segment_num: u32) -> u32{
+        let element_num = (1 + mesh_grid_segment_num).pow(2);
+        let element_size = std::mem::size_of::<[f32; 7]>();
+        element_num * 3 * element_size as u32
+    }
+
     pub fn to_writer<W>(&self, writer: &mut W) -> Result<(), std::io::Error> where W: std::io::Write{
         writer.write_all(bytemuck::cast_slice(&self.cell_positions.data))?;
         writer.write_all(bytemuck::cast_slice(&self.cell_elevations.data))?;
@@ -350,7 +352,7 @@ impl RegionsShareInfo{
 
 //one of six faces of a cube-sphere planet
 impl Region {
-    const POOL_MAX:u32 = 200;
+    const POOL_MAX:u32 = 400;
 
     pub fn build(axis: math::AxisNormal,region_share:& RegionsShareInfo, planet_desc: &PlanetDescriptor, noise_func: impl Fn(&[f32; 3]) -> (f32, [f32; 3]),planet_dir: std::path::PathBuf) {
 
@@ -372,7 +374,7 @@ impl Region {
         for yi in 0..region_share.region_side_plots_num {
             for xi in 0..region_share.region_side_plots_num{
                 let plot_index = yi * region_share.region_side_plots_num + xi;
-                
+                println!("gen plot data :{}  {}", xi, yi);
                 let pos = axis.mat3() * Vec3::new(
                     -1.0 + (xi as f32 + 0.5) * 2.0 / region_share.region_side_plots_num as f32,
                     -1.0 + (yi as f32 + 0.5) * 2.0 / region_share.region_side_plots_num as f32,
@@ -417,7 +419,7 @@ impl Region {
             
             for yi in 0..level_chunk_side_num{
                 for xi in 0..level_chunk_side_num{
-
+                    println!("gen terrain data :{} {} {}", li, xi, yi);
                     let chunk_terrain_data = ChunkTerrainData::from_plot_data_grid(&plot_data_grid, (xi as u32, yi as u32), level_chunk_side_num as u32, &planet_desc, axis);
                     let index = utils::interleave_bit(xi as u16, yi as u16) + utils::LEVELS[li as usize];
 
@@ -513,24 +515,25 @@ impl Region {
 
     }   
 
-    pub fn calc_detail_value(camera: &camera::Camera, pos: &Vec3<f32>, normal: &Vec3<f32>) -> f32{
+    pub fn calc_detail_value(camera: &camera::Camera, pos: &Vec3<f32>, normal: &Vec3<f32>, c: f32) -> f32{
         let (dotre, distance) = camera.ray_dot(*pos, *normal);
-        let detail_value = if dotre < 0.0{
+        let detail_value = if dotre < 0.0 || camera.is_point_visible(*pos){
             0.0f32
         } else{
-            
-            dotre * 1.0 / (1.0 + distance/(camera.projection.zfar/2.0))
+            (dotre   / (distance * distance) * c).min(1.0f32)
         };
         detail_value
     }
 
     
 
-    pub fn update(&mut self, camera: &camera::Camera, planet_dir: &std::path::PathBuf, mesh_segment_num: u32){
-
+    pub fn update(&mut self, camera: &camera::Camera, planet_dir: &std::path::PathBuf, mesh_segment_num: u32, planet_radius:f32, detail_cap: f32){
+        let plot_nums = self.plot_positions_grid.len();
+        let cell_a = 4.0f32 * PI * planet_radius.pow(2) / ((plot_nums as u32 * mesh_segment_num.pow(2))) as f32;
+        let c = 1.0f32 / (camera.projection.fovy / 2.0).tan().pow(2) * cell_a;
         for i in 0..self.plot_positions_grid.len(){
             let pos:Vec3<f32> =  self.plot_positions_grid[i].into();
-            let detail_value = Self::calc_detail_value(camera, &pos, &pos.normalized());
+            let detail_value = Self::calc_detail_value(camera, &pos, &pos.normalized(), c);
             let coord = self.plot_positions_grid.get_coords(i);
             let zi = utils::interleave_bit(coord.x as u16, coord.y as u16);
             self.plot_details_grid[zi as usize] = detail_value;
@@ -555,10 +558,10 @@ impl Region {
 
         
 
-        self.update_terrain(mesh_segment_num);
+        self.update_terrain(mesh_segment_num, detail_cap);
     }
 
-    fn update_terrain(&mut self, mesh_segment_num: u32){
+    fn update_terrain(&mut self, mesh_segment_num: u32 ,detail_cap: f32){
         //quad tree dfs chunk details
         let mut stack = Vec::new();
         stack.push(0);
@@ -566,7 +569,7 @@ impl Region {
         let mut need_render_chunks = Vec::new();
 
         while let Some(index) = stack.pop() {
-            if self.chunk_details[index] <= 1.0{
+            if self.chunk_details[index] <= detail_cap{
                 need_render_chunks.push(index);
                 continue;
             }
@@ -579,7 +582,7 @@ impl Region {
                 }
             }else{
                 //format panic index not pushed to stack
-                panic!("index not pushed to stack");
+                need_render_chunks.push(index);
                 
                 // need_render_chunks.push(index);
             }
@@ -895,7 +898,7 @@ pub struct Planet{
     pub seed: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PlanetDescriptor{
     pub name: Name,
     pub radius: f32,
@@ -913,7 +916,15 @@ impl PlanetDescriptor{
         2u32.pow(self.lod_level as u32)
     }
 
-    
+    pub fn calc_bytes_need(&self) -> u32 {
+        let region_chunks_num = 4u32.pow(self.lod_level as u32 - 1) / 3;
+        let chunk_size = ChunkTerrainData::byte_size(self.mesh_grid_segment_num) as u32;
+
+        let plot_size = PlotTerrainData::calc_byte_size(self.mesh_grid_segment_num);
+        let plot_num = self.calc_plots_side_num().pow(2);
+
+        plot_num * plot_size + region_chunks_num * chunk_size * 6
+    }
 }
 
 
@@ -958,6 +969,7 @@ impl Planet{
             // let plot_side_num = planet_desc.calc_plots_side_num();
             for ri in 0..6{
                 let axis = math::AxisNormal::from_u32(ri);
+                println!("building region: {}", axis);
                 Region::build(axis, &info, planet_desc, noise_func, planet_dir.clone());
 
                 
@@ -987,6 +999,7 @@ impl Planet{
         });
 
         let plot_side_num = planet_desc.calc_plots_side_num();
+        
 
         Ok(Self{
             planet_dir,
@@ -1029,9 +1042,9 @@ impl Planet{
         
     }
 
-    pub fn update(&mut self, _delta_time: f32, camera: &camera::Camera){
+    pub fn update(&mut self, _delta_time: f32, camera: &camera::Camera, detail_cap: f32){
         for i in 0..6{
-            self.regions[i].update(camera, &self.planet_dir ,self.mesh_grid_segment_num);
+            self.regions[i].update(camera, &self.planet_dir ,self.mesh_grid_segment_num, self.radius, detail_cap);
             
         }
     }
@@ -1062,7 +1075,7 @@ mod test{
         let planet_desc = PlanetDescriptor{
             name: utils::Name::new("AA"),
             radius: 100.0,
-            lod_level: 4,
+            lod_level: 8,
             position: Vec3::new(0.0, 0.0, 0.0),
             rotation: Quaternion::identity(),
             mesh_grid_segment_num: 16,

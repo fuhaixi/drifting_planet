@@ -36,6 +36,14 @@ pub struct CameraOrbitController{
     pub pitch_input: f32,
 
     pub last_mouse_pos: Vec2<f32>,
+
+    alt_offset_input: Vec2<f32>,
+    alt_offset: Vec2<f32>,
+    alt_hold: bool,
+}
+
+pub struct CameraFp{
+    
 }
 
 impl CameraOrbitController{
@@ -58,6 +66,10 @@ impl CameraOrbitController{
 
             yaw_input: 0.0,
             pitch_input: 0.0,
+
+            alt_hold: false,
+            alt_offset_input: Vec2::zero(),
+            alt_offset: Vec2::zero(),
         }
     }
 
@@ -75,8 +87,14 @@ impl CameraOrbitController{
                 
                 if self.is_dragging{
                     let delta = mouse_pos - self.last_mouse_pos;
-                    self.yaw_input = delta.x;
-                    self.pitch_input = delta.y;
+                    if self.alt_hold{
+                        self.alt_offset_input = delta;
+                    }
+                    else{
+
+                        self.yaw_input = delta.x;
+                        self.pitch_input = delta.y;
+                    }
                 }
                 
                 self.last_mouse_pos = mouse_pos;
@@ -93,12 +111,38 @@ impl CameraOrbitController{
                     }
                 }
             }
+
+
+            //alt pressed to offset center point
+            WindowEvent::KeyboardInput{input, ..} => {
+                if let Some(key) = input.virtual_keycode{
+                    match key{
+                        VirtualKeyCode::LAlt => {
+                            self.alt_hold = input.state == ElementState::Pressed;
+                            if self.alt_hold == false{
+                                self.alt_offset_input = Vec2::zero();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
 
     pub fn update_camera(&mut self, camera: &mut camera::Camera, delta_time: f32){
         camera.target = self.center;
+
+        let center_offset;
+        if self.alt_hold{
+            self.alt_offset += self.alt_offset_input * delta_time * 0.5;
+            let quat = Quaternion::rotation_3d(self.alt_offset.x, camera.get_right_axis()).rotate_3d(self.alt_offset.y, camera.get_up_axis());
+            center_offset = (self.alt_offset.x * camera.get_right_axis() + self.alt_offset.y *camera.get_up_axis()) * self.orbit_radius * 0.1f32;
+        }
+        else{
+            center_offset = Vec3::zero();
+        }
 
         self.yaw += self.yaw_input * self.orbit_speed * delta_time;
         self.pitch += self.pitch_input * self.orbit_speed * delta_time;
@@ -113,15 +157,17 @@ impl CameraOrbitController{
         let quat =  Quaternion::rotation_y(self.yaw)* Quaternion::rotation_x(self.pitch) ;
 
 
-        self.orbit_radius -= self.wheel_input * self.zoom_speed * delta_time;
+        self.orbit_radius -= self.wheel_input * self.zoom_speed  * self.orbit_radius * delta_time * 0.1f32;
         self.orbit_radius = self.orbit_radius.max(0.1);
-
-        camera.eye = self.center + quat * Vec3::unit_z() * self.orbit_radius;
+   
+        camera.eye = self.center + quat * Vec3::unit_z() * self.orbit_radius + center_offset;
+       
 
         //clear input
         self.yaw_input = 0.0;
         self.pitch_input = 0.0;
         self.wheel_input = 0.0;
+        self.alt_offset_input = Vec2::zero();
     }
 }
 
@@ -176,6 +222,8 @@ struct State{
     cube_state: mesh::TrianglesState,
     cube_render_pipeline: wgpu::RenderPipeline,
     world_dir_path: path::PathBuf,
+    detail_cap: f32,
+    fps_debug: bool,
 }
 
 impl State {
@@ -185,7 +233,7 @@ impl State {
             aspect: gpu_agent.surface_aspect(),
             fovy: PI/4.0,
             znear: 0.1,
-            zfar: 200.0,
+            zfar: 400.0,
         });
         let camera_controller = CameraOrbitController::new([0.0, 0.0, 0.0].into(), 10.0);
 
@@ -223,6 +271,8 @@ impl State {
             cube_render_pipeline,
             freeze_mode:false,
             world_dir_path,
+            detail_cap: 1.0f32,
+            fps_debug: false,
         }
     }
 
@@ -243,6 +293,35 @@ impl State {
                     }
                 }
             }
+
+            //if press k print fps
+            if let WindowEvent::KeyboardInput { input, .. } = event {
+                if let Some(key_code) = input.virtual_keycode {
+                    if input.state == ElementState::Pressed {
+                        if key_code == VirtualKeyCode::K {
+                            self.fps_debug = !self.fps_debug;
+                        }
+                    }
+                }
+            }
+        }
+
+    
+
+        //prees +- control detail cap
+        if let WindowEvent::KeyboardInput { input, .. } = event {
+            if let Some(key_code) = input.virtual_keycode {
+                if input.state == ElementState::Pressed {
+                    if key_code == VirtualKeyCode::NumpadAdd {
+                        self.detail_cap *= 2.0;
+                        println!("detail cap: {}", self.detail_cap);
+                    }
+                    if key_code == VirtualKeyCode::NumpadSubtract {
+                        self.detail_cap /= 2.0;
+                        println!("detail cap: {}", self.detail_cap);
+                    }
+                }
+            }
         }
     }
 
@@ -252,9 +331,13 @@ impl State {
 
         if !self.freeze_mode{
 
-            self.world.update(delta_time, &self.camera);
+            self.world.update(delta_time, &self.camera, self.detail_cap);
         }
         self.world_state.update_visible_planets_state(&self.world, &self.gpu_agent);
+
+        if self.fps_debug{
+            println!("fps: {}", 1.0/delta_time);
+        }
     }
 
     pub fn focus(&mut self, planet_name: &Name){
@@ -431,8 +514,8 @@ mod test{
 
     }
 
-    #[test]
-    fn _build_world(){
+    
+    fn _build_world(level: u8, grid_segment_num: u32) -> f32{
         let save_dir_path = path::PathBuf::from("test/save");
         let world_dir_path =save_dir_path.join("world_A");
         if !world_dir_path.exists(){
@@ -445,14 +528,16 @@ mod test{
 
         let planet_desc = planet::PlanetDescriptor{
             name: utils::Name::new("AA"),
-            radius: 100.0,
-            lod_level: 4,
+            radius: 50.0,
+            lod_level: level,
             position: Vec3::new(0.0, 0.0, 0.0),
             rotation: Quaternion::identity(),
-            mesh_grid_segment_num: 8,
+            mesh_grid_segment_num: grid_segment_num,
             seed: 0,
             terrain_elevation_bounds: (-3.0, 3.0),
         };
+
+  
 
         let planet_dir = world_dir_path.join("AA");
         if !planet_dir.exists(){
@@ -463,6 +548,56 @@ mod test{
 
 
         world::World::build(&world_desc, world_dir_path).unwrap();
+        let byte_need = planet_desc.calc_bytes_need();
+        let mb = byte_need as f32 / 1024.0 / 1024.0;
+        return  mb ;
+    }
+
+    #[test]
+    fn _build_world_0(){
+        //set level = 6 and change grid_segment_num from 4 to 16
+        //record time and memory usage
+        let mut infos = Vec::new();
+
+        for grid_segment_num in 4..=16{
+            //time
+            let start = std::time::Instant::now();
+            let mb = _build_world(5, grid_segment_num);
+            let end = std::time::Instant::now();
+            let duration = end.duration_since(start);
+            let duration = duration.as_secs_f32();
+            infos.push((grid_segment_num, duration, mb));
+        }
+        
+        for (grid_segment_num, duration, mb) in infos{
+            println!("level 5 ,grid_segment_num {} => duration: {}, mb: {}", grid_segment_num, duration, mb);
+        }
+    }
+
+    #[test]
+    fn _build_world_1(){
+        //set level = 6 and change grid_segment_num from 4 to 16
+        //record time and memory usage
+        let mut infos = Vec::new();
+
+        for level in 4..=8{
+            //time
+            let start = std::time::Instant::now();
+            let mb = _build_world(level, 8);
+            let end = std::time::Instant::now();
+            let duration = end.duration_since(start);
+            let duration = duration.as_secs_f32();
+            infos.push((level, duration, mb));
+        }
+        
+        for (level, duration, mb) in infos{
+            println!("level {} ,grid_segment_num 8 => duration: {}, mb: {}", level, duration, mb);
+        }
+    }
+
+    #[test]
+    fn _build_world_2(){
+        _build_world(5, 64);
     }
 }
 

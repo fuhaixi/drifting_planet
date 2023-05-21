@@ -2,7 +2,7 @@ use wgpu::util::DeviceExt;
 use crate::texture;
 
 
-
+//GPU 模块
 pub struct GpuAgent{
     pub surface: wgpu::Surface,
     pub device: wgpu::Device,

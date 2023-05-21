@@ -120,9 +120,9 @@ impl World{
         }
     }
 
-    pub fn update(&mut self, delta_time: f32, camera: &camera::Camera){
+    pub fn update(&mut self, delta_time: f32, camera: &camera::Camera, detail_cap: f32){
         for planet in self.visible_planets.iter_mut(){
-            planet.update(delta_time, camera);
+            planet.update(delta_time, camera, detail_cap);
         }
     }
 
@@ -134,6 +134,9 @@ impl World{
         }
 
         println!("Focusing on planet {}", planet_name);
+        //print descsriptor
+        let planet_desc = self.planets.iter().find(|p| p.name == *planet_name).unwrap();
+        println!("Planet descriptor: {:?}", planet_desc);
 
         let planet_path = world_dir_path.join(planet_name.as_str());
         let planet = planet::Planet::load_from_dir(planet_path, planet_name.clone()).unwrap();

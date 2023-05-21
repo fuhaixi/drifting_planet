@@ -63,7 +63,19 @@ fn vs_main(model: VertexInput, instance: InstanceInput ) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-	let obj_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+	//give red color border according to uv
+	let uv = in.tex_coords;
+	let border_width: f32 = 0.3;
+	let border_color: vec4<f32> = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+	var border_distance: vec2<f32> = abs(uv - vec2<f32>(0.44, 0.44));
+	var border_alpha: f32 = step(border_distance.x, border_width) * step(border_distance.y, border_width);
+
+
+
+
+
+
+	let obj_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), border_color, border_alpha);
 	let ambient_strength = 0.1;
 	let ambient_light =  light.color * ambient_strength;
 	
@@ -73,5 +85,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 	let result_color = (diffuse_light + ambient_light) * obj_color.xyz;
 
-	return vec4<f32>(result_color, obj_color.a);
+	//uv color
+	// let result_color = vec3<f32>(uv, 0.0);
+
+	return vec4<f32>(result_color , 1.0);
 }

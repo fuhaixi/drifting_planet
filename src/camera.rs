@@ -50,6 +50,20 @@ pub struct Camera{
 
 impl Camera{
     
+    pub fn get_up_axis(&self) -> Vec3<f32> {
+        let view_matrix = self.uniform.view_matrix;
+        Vec3::new(view_matrix[0][1], view_matrix[1][1], view_matrix[2][1])
+    }
+
+    pub fn get_forward_axis(&self) -> Vec3<f32> {
+        let view_matrix = self.uniform.view_matrix;
+        Vec3::new(view_matrix[0][2], view_matrix[1][2], view_matrix[2][2])
+    }
+
+    pub fn get_right_axis(&self) -> Vec3<f32> {
+        let view_matrix = self.uniform.view_matrix;
+        Vec3::new(view_matrix[0][0], view_matrix[1][0], view_matrix[2][0])
+    }
     
     pub const PUSH_CONSTANT_RANGE: wgpu::PushConstantRange = wgpu::PushConstantRange{
         stages: wgpu::ShaderStages::VERTEX_FRAGMENT,

@@ -22,3 +22,6 @@ log = "0.4"
 pollster = "0.2"
 anyhow = "1.0.70"
 noise = "0.8.2"
+
+[profile.test]
+opt-level = 2
