@@ -1,0 +1,25 @@
+(
+    name: "FF",
+    radius: 50.0,
+    lod_level: 4,
+    position: (
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    ),
+    rotation: (
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    ),
+    mesh_grid_segment_num: 32,
+    terrain_noise: (
+        seed: 4,
+        octaves: 1,
+        frequency: 5.0,
+        lacunarity: 3.0,
+        persistence: 0.2,
+    ),
+    elevation_scale: 3.0,
+)

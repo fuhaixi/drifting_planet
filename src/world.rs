@@ -271,12 +271,12 @@ impl WorldState{
         render_pass.draw(0..3, 0..1);
     }
 
-    pub fn render_visible_planets<'a>(&'a self, render_pass: & mut wgpu::RenderPass<'a>, camera: &camera::Camera, world: &World){
+    pub fn render_visible_planets<'a>(&'a self, render_pass: & mut wgpu::RenderPass<'a>, camera: &camera::Camera, world: &World, wireframe: bool){
         for i in 0..self.visible_planets_state.len(){
             let planet_state = &self.visible_planets_state[i];
             let planet = &world.visible_planets.get(i).unwrap_or_else(|| panic!("planet {} is visible but not loaded into world", i));
     
-            planet_state.render_terrain(render_pass, camera, planet, |l| true );
+            planet_state.render_terrain(render_pass, camera, planet, wireframe);
          
         }
     }

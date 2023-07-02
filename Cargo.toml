@@ -22,6 +22,7 @@ log = "0.4"
 pollster = "0.2"
 anyhow = "1.0.70"
 noise = "0.8.2"
+clap = { version = "4.3.0", features = ["derive"] }
 
 [profile.test]
 opt-level = 2

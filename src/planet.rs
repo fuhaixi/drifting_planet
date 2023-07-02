@@ -11,6 +11,7 @@ use crate::utils;
 use bincode::de;
 use serde::{Serialize, Deserialize};
 use vek::num_traits::Pow;
+use wgpu::util;
 use crate::gpu;
 use crate::mesh;
 use vek::*;
@@ -128,35 +129,30 @@ impl ChunkTerrainData{
                 let xy = axis.get_xy(&position);
                 let region_uv:Vec2<f32> = xy.map(|s| (s + 1.0)/2.0).into();
                 
-                let (elevation, normal) = Self::sample_on_grid_plot(plot_grid, region_uv);
-                let tangent =  
-
-                let (elevation_x0, _) = Self::sample_on_grid_plot(plot_grid, region_uv - Vec2::new(0.01, 0.0));
-                let (elevation_x1, _) = Self::sample_on_grid_plot(plot_grid, region_uv + Vec2::new(0.01, 0.0));
-                let (elevation_y0, _) = Self::sample_on_grid_plot(plot_grid, region_uv - Vec2::new(0.0, 0.01));
-                let (elevation_y1, _) = Self::sample_on_grid_plot(plot_grid, region_uv + Vec2::new(0.0, 0.01));
-
+                let (elevation, _) = Self::sample_on_grid_plot(plot_grid, region_uv);
                 
-                
+
                 let position = Vec3::<f32>::from(position).normalized() * (planet_desc.radius + elevation);
                 
                 let v: mesh::MeshVertex = mesh::MeshVertex{
                     pos: position.into_array(),
-                    normal,
+                    normal: [0.0, 0.0, 0.0],
                     tex_coord:chunk_uv.into_array(),
+                    tangent: [0.0, 0.0, 0.0]
                 };
 
                 vertices.push(v);
             }
         };
 
-        //normal
-
+      
+        let mut mesh = mesh::Mesh { vertices, indices:triangles.1 };
+        mesh.calc_normal();
+        mesh.calc_tangent();
         
 
-        Self { mesh: mesh::Mesh { vertices, indices:triangles.1 } }
+        Self { mesh }
 
-    
     }
 
     #[allow(dead_code)]
@@ -192,6 +188,7 @@ impl ChunkTerrainData{
                 pos: position.into_array(),
                 normal: normal,
                 tex_coord: uv.into_array(),
+                tangent: [0.0 , 0.0, 0.0],
             }
         }).collect();
 
@@ -261,13 +258,16 @@ pub struct PlotTerrainData{
 
 impl PlotTerrainData{
 
-    pub fn new(cell_positions: utils::Grid<[f32; 3]>, map_func: impl Fn(&[f32; 3]) -> (f32, [f32; 3])) -> Self{
+    pub fn new(cell_positions: utils::Grid<[f32; 3]>, fbm: &noise::Fbm<noise::OpenSimplex>, elevation_scale: f32) -> Self{
+        use noise::NoiseFn;
         let cell_elevations: utils::Grid<f32> = cell_positions.map(|pos|{
-            map_func(pos).0
+            let pos = Vec3::<f32>::from(*pos).normalized();
+            let pos = pos.map(|x| x as f64);
+            fbm.get(pos.into_array()) as f32 * elevation_scale
         });
 
         let cell_normals = cell_positions.map(|pos|{
-            map_func(pos).1
+            [0.0, 0.0, 0.0]
         });
 
         Self{
@@ -354,7 +354,7 @@ impl RegionsShareInfo{
 impl Region {
     const POOL_MAX:u32 = 400;
 
-    pub fn build(axis: math::AxisNormal,region_share:& RegionsShareInfo, planet_desc: &PlanetDescriptor, noise_func: impl Fn(&[f32; 3]) -> (f32, [f32; 3]),planet_dir: std::path::PathBuf) {
+    pub fn build(axis: math::AxisNormal,region_share:& RegionsShareInfo, planet_desc: &PlanetDescriptor, fbm: &noise::Fbm<noise::OpenSimplex>, planet_dir: std::path::PathBuf) {
 
         
         //creat a plot_data file
@@ -396,7 +396,7 @@ impl Region {
                 let cell_positions = utils::Grid::new_square(planet_desc.mesh_grid_segment_num, cell_positions);
                 
 
-                let plot_data = PlotTerrainData::new(cell_positions, &noise_func);
+                let plot_data = PlotTerrainData::new(cell_positions, fbm, planet_desc.elevation_scale);
                 plot_data.to_writer(&mut plot_data_writer).unwrap();
                 
                 
@@ -675,6 +675,7 @@ pub struct PlanetState{
     
     debug_color_uniform_buffer: wgpu::Buffer,
     debug_color_bind_group: wgpu::BindGroup,
+    terrain_wireframe_pipeline: wgpu::RenderPipeline,
 }
 
 impl PlanetState {
@@ -769,11 +770,22 @@ impl PlanetState {
             &terrain_pipeline_layout, 
             &[mesh::MeshVertex::vertex_layout::<0>(), mesh::TransformInstance::vertex_layout::<5>()],
             &terrain_shader, 
-            wgpu::PolygonMode::Line,
+            wgpu::PolygonMode::Fill,
             agent.config.format, 
             texture::Texture::DEPTH_FORMAT, 
             Some(wgpu::Face::Back),
             "terrain render pipeline"
+        );
+
+        let terrain_wireframe_pipeline = agent.create_render_pipeline(
+            &terrain_pipeline_layout, 
+            &[mesh::MeshVertex::vertex_layout::<0>(), mesh::TransformInstance::vertex_layout::<5>()],
+            &terrain_shader, 
+            wgpu::PolygonMode::Line,
+            agent.config.format, 
+            texture::Texture::DEPTH_FORMAT, 
+            Some(wgpu::Face::Back),
+            "terrain wireframe render pipeline"
         );
 
         // let sea_pipeline_layout = agent.create_pipeline_layout(&[], &[camera::Camera::PUSH_CONSTANT_RANGE], "sea pipeline layout");
@@ -825,6 +837,8 @@ impl PlanetState {
 
             debug_color_bind_group,
             debug_color_uniform_buffer,
+
+            terrain_wireframe_pipeline,
         }
     }
 
@@ -846,9 +860,15 @@ impl PlanetState {
         render_pass: & mut wgpu::RenderPass<'a>, 
         camera: & camera::Camera,
         planet: & Planet,
-        level_filter: impl Fn (u32) -> bool,
+        wireframe: bool,
     ) {
-        render_pass.set_pipeline(&self.terrain_render_pipeline);
+        if wireframe{
+            render_pass.set_pipeline(&self.terrain_wireframe_pipeline);
+        }
+        else {
+
+            render_pass.set_pipeline(&self.terrain_render_pipeline);
+        }
         render_pass.set_bind_group(0, &self.sun_light_bind_group, &[]);
         render_pass.set_push_constants(wgpu::ShaderStages::VERTEX_FRAGMENT, 0, camera.get_uniform_data() );
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
@@ -894,8 +914,8 @@ pub struct Planet{
 
     pub plots_side_num: u32,
     pub mesh_grid_segment_num: u32,
-    pub terrain_elevation_bounds: (f32, f32),
-    pub seed: u32,
+    pub terrain_noise: utils::NoiseDescriptor,
+    pub elevation_scale: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -906,9 +926,10 @@ pub struct PlanetDescriptor{
     pub position: Vec3<f32>,
     pub rotation: Quaternion<f32>,
     pub mesh_grid_segment_num: u32,
-    pub seed: u32,
-    pub terrain_elevation_bounds: (f32, f32),
 
+    
+    pub terrain_noise: utils::NoiseDescriptor,
+    pub elevation_scale: f32,
 }
 
 impl PlanetDescriptor{
@@ -951,26 +972,14 @@ impl Planet{
         
 
         {//build regions
-            use noise::{NoiseFn, Perlin, Fbm};
-
-           
-            let fbm = Fbm::<Perlin>::new(0);
-            let noise_func = |pos: &[f32; 3]| ->(f32, [f32; 3]) {
-                let pos_f64 = pos.map(|s| (s/planet_desc.radius) as f64);
-                let elevation = utils::map01_to_bound( fbm.get(pos_f64) as f32, planet_desc.terrain_elevation_bounds);
-
-                
-                
-                let pos = Vec3::<f32>::from(*pos);
-                let normal = pos.normalized().into_array();
-                (elevation, normal)
-            };
+            let fbm = utils::build_open_simplex_noise(&planet_desc.terrain_noise);
+            
             let info = RegionsShareInfo::new(planet_desc.lod_level);
             // let plot_side_num = planet_desc.calc_plots_side_num();
             for ri in 0..6{
                 let axis = math::AxisNormal::from_u32(ri);
                 println!("building region: {}", axis);
-                Region::build(axis, &info, planet_desc, noise_func, planet_dir.clone());
+                Region::build(axis, &info, planet_desc, &fbm, planet_dir.clone());
 
                 
             }
@@ -1012,8 +1021,8 @@ impl Planet{
             regions_share: region_share,
             plots_side_num: plot_side_num,
             mesh_grid_segment_num: planet_desc.mesh_grid_segment_num,
-            terrain_elevation_bounds: planet_desc.terrain_elevation_bounds,
-            seed: planet_desc.seed,
+            terrain_noise: planet_desc.terrain_noise,
+            elevation_scale: planet_desc.elevation_scale,
         })
 
     }
@@ -1027,8 +1036,8 @@ impl Planet{
             lod_level: self.lod_level,
             rotation: self.rotation,
             mesh_grid_segment_num: self.mesh_grid_segment_num,
-            seed: self.seed,
-            terrain_elevation_bounds: self.terrain_elevation_bounds,
+            terrain_noise: self.terrain_noise.clone(),
+            elevation_scale: self.elevation_scale,
         }
     }
 
@@ -1075,12 +1084,18 @@ mod test{
         let planet_desc = PlanetDescriptor{
             name: utils::Name::new("AA"),
             radius: 100.0,
-            lod_level: 8,
+            lod_level: 4,
             position: Vec3::new(0.0, 0.0, 0.0),
             rotation: Quaternion::identity(),
-            mesh_grid_segment_num: 16,
-            seed: 0,
-            terrain_elevation_bounds: (-3.0, 3.0),
+            mesh_grid_segment_num: 32,
+            terrain_noise: utils::NoiseDescriptor{
+                seed: 0,
+                frequency: 1.0,
+                lacunarity: 2.0,
+                persistence: 0.5,
+                octaves: 8,
+            },
+            elevation_scale: 3.0,
         };
         let planet_dir = std::path::PathBuf::from("test/planet/AA");
         //create planet dir if not exsited

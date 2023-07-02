@@ -8,6 +8,7 @@ struct VertexInput {
 	@location(0) position: vec3<f32>,
 	@location(1) tex_coords: vec2<f32>,
 	@location(2) normal: vec3<f32>,
+	@location(3) tangent: vec3<f32>,
 }
 
 struct InstanceInput {
@@ -65,9 +66,9 @@ fn vs_main(model: VertexInput, instance: InstanceInput ) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	//give red color border according to uv
 	let uv = in.tex_coords;
-	let border_width: f32 = 0.3;
+	let border_width: f32 = 0.45;
 	let border_color: vec4<f32> = vec4<f32>(1.0, 0.0, 0.0, 1.0);
-	var border_distance: vec2<f32> = abs(uv - vec2<f32>(0.44, 0.44));
+	var border_distance: vec2<f32> = abs(uv - vec2<f32>(0.5, 0.5));
 	var border_alpha: f32 = step(border_distance.x, border_width) * step(border_distance.y, border_width);
 
 
@@ -75,7 +76,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 
 
-	let obj_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), border_color, border_alpha);
+	let obj_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), border_color , 1.0 -border_alpha);
 	let ambient_strength = 0.1;
 	let ambient_light =  light.color * ambient_strength;
 	

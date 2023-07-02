@@ -343,14 +343,14 @@ pub fn create_new_file<P>(path: P) -> Result<std::fs::File, std::io::Error> wher
     }
 }
 
-// pub fn noise(p: Vec3<f32>) -> (f32, Vec3<f32>){
 
-// }
 
+#[allow(dead_code)]
 pub fn map01_to_bound(value01: f32, bound: (f32, f32) ) -> f32{
     value01 * (bound.1 - bound.0) + bound.0
 }
 
+#[allow(dead_code)]
 pub fn interleave_bit(x: u16, y: u16) -> u32{
     let mut z = 0u32;
     let x = x as u32;
@@ -361,6 +361,7 @@ pub fn interleave_bit(x: u16, y: u16) -> u32{
     z
 }
 
+#[allow(dead_code)]
 pub fn de_interleave_bit(z: u32) -> (u16, u16){
     let mut x = 0u16;
     let mut y = 0u16;
@@ -369,6 +370,32 @@ pub fn de_interleave_bit(z: u32) -> (u16, u16){
         y |= ((z & (1 << (2 * i + 1))) >> (i + 1)) as u16;
     }
     (x, y)
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct NoiseDescriptor {
+    pub seed: u32,
+    pub octaves: usize,
+    pub frequency: f64,
+    pub lacunarity: f64,
+    pub persistence: f64,
+}
+
+use noise::{Fbm, MultiFractal, Seedable, OpenSimplex};
+
+pub fn build_noise<T>(descriptor: &NoiseDescriptor) -> Fbm<T>
+where
+    T: Default + Seedable,
+{
+    Fbm::new(descriptor.seed)
+        .set_octaves(descriptor.octaves)
+        .set_frequency(descriptor.frequency)
+        .set_lacunarity(descriptor.lacunarity)
+        .set_persistence(descriptor.persistence)
+}
+
+pub fn build_open_simplex_noise(descriptor: &NoiseDescriptor) -> Fbm<OpenSimplex> {
+    build_noise(descriptor)
 }
 
 #[cfg(test)]

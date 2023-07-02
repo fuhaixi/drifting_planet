@@ -21,6 +21,32 @@ impl ViewProj{
     }
 }
 
+///camera controller
+/// mouse move to rotate camera
+pub struct CameraFreeController{
+    pub camera_base_state: Camera,
+    pub speed: f32,
+    pub sensitivity: f32,
+    yaw: f32,
+    pitch: f32,
+}
+
+impl CameraFreeController{
+    pub fn new(camera: Camera, speed: f32, sensitivity: f32) -> Self{
+        Self{
+            camera_base_state: camera,
+            speed,
+            sensitivity,
+            yaw: 0.0,
+            pitch: 0.0,
+        }
+    }
+
+    pub fn update_camera(&self, camera: &mut Camera){
+
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Projection{
     pub aspect: f32,
@@ -126,14 +152,42 @@ impl Camera{
 
 }
 
+///
+pub struct Cam{
+    pub basis: Mat3<f32>,
+    pub position: Vec3<f32>,
+    pub projection: Projection,
+}
+
+impl Cam{
+    pub fn build_viewproj(&self) -> ViewProj{
+        let basis = self.basis.into_col_arrays();
+        let view_matrix = Mat4::from_col_array([
+            basis[0][0], basis[1][0], basis[2][0], 0.0,
+            basis[0][1], basis[1][1], basis[2][1], 0.0,
+            basis[0][2], basis[1][2], basis[2][2], 0.0,
+            -self.position.dot(Vec3::new(basis[0][0], basis[1][0], basis[2][0])),
+            -self.position.dot(Vec3::new(basis[0][1], basis[1][1], basis[2][1])),
+            -self.position.dot(Vec3::new(basis[0][2], basis[1][2], basis[2][2])),
+            1.0,
+        ]);
+
+        let proj_matrix = Mat4::perspective_rh_zo(self.projection.fovy, self.projection.aspect, self.projection.znear, self.projection.zfar);
+        ViewProj{
+            view_matrix: view_matrix.into_col_arrays(),
+            proj_matrix: proj_matrix.into_col_arrays(),
+        }
+    }
 
 
+}
 
 mod test{
-    use super::*;
+    
 
     #[test]
     fn test_ndc_transform(){
+        use super::*;
         let camera = Camera::new(
             Vec3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, -1.0),

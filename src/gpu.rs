@@ -18,7 +18,7 @@ pub struct GpuAgent{
 }
 
 impl GpuAgent{
-
+    #[allow(dead_code)]
     pub fn render_full_screen_triangle<'a: 'b, 'b>(&'a self, render_pass: &'b mut wgpu::RenderPass<'b>){
         render_pass.set_vertex_buffer(0, self.fst_buffer.slice(..));
         render_pass.draw(0..3, 0..1);

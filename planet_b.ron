@@ -1,0 +1,25 @@
+(
+    name: "BB",
+    radius: 50.0,
+    lod_level: 4,
+    position: (
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    ),
+    rotation: (
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    ),
+    mesh_grid_segment_num: 32,
+    terrain_noise: (
+        seed: 4,
+        octaves: 12,
+        frequency: 20.0,
+        lacunarity: 2.0,
+        persistence: 0.5,
+    ),
+    elevation_scale: 3.0,
+)

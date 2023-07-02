@@ -8,6 +8,7 @@ mod planet;
 mod utils;
 mod math;
 mod user;
+mod noise;
 use std::path;
 use utils::Name;
 use vek::*;
@@ -174,14 +175,18 @@ impl CameraOrbitController{
 
 pub fn build_planet(config_file: std::fs::File, save_dir_path: path::PathBuf) -> Result<(), std::io::Error> {
     let planet_desc: planet::PlanetDescriptor = ron::de::from_reader(config_file).unwrap();
+    let byte_need = planet_desc.calc_bytes_need();
+    let mb = byte_need as f32 / 1024.0 / 1024.0;
+    
     //check if planet already exists
     let planet_dir_path = save_dir_path.join(&planet_desc.name);
-    if planet_dir_path.exists() {
-        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "planet already exists"));
+    if !planet_dir_path.exists() {
+        fs::create_dir_all(&planet_dir_path).unwrap();
     }
-
-    planet::Planet::build(&planet_desc, save_dir_path).unwrap();
     
+    planet::Planet::build(&planet_desc, planet_dir_path).unwrap();
+    
+    println!("cost space: {} mb", mb);
     Ok(())
 }
 
@@ -200,9 +205,9 @@ pub fn list_planets(save_path: path::PathBuf){
     }
 }
 
-pub fn init_world(save_dir_path: path::PathBuf) -> Result<(), std::io::Error> {
+pub fn init_world(save_dir_path: path::PathBuf, name: String) -> Result<(), std::io::Error> {
     let world_desc = world::WorldDescriptor{
-        name: utils::Name::new("new world"),
+        name: utils::Name::new(&name),
     };
     let world_path = save_dir_path.join(&world_desc.name);
     world::World::build(&world_desc, world_path).unwrap();
@@ -224,6 +229,7 @@ struct State{
     world_dir_path: path::PathBuf,
     detail_cap: f32,
     fps_debug: bool,
+    wireframe: bool,
 }
 
 impl State {
@@ -273,6 +279,7 @@ impl State {
             world_dir_path,
             detail_cap: 1.0f32,
             fps_debug: false,
+            wireframe: false,
         }
     }
 
@@ -300,6 +307,17 @@ impl State {
                     if input.state == ElementState::Pressed {
                         if key_code == VirtualKeyCode::K {
                             self.fps_debug = !self.fps_debug;
+                        }
+                    }
+                }
+            }
+
+            //if press l toggle wireframe
+            if let WindowEvent::KeyboardInput { input, .. } = event {
+                if let Some(key_code) = input.virtual_keycode {
+                    if input.state == ElementState::Pressed {
+                        if key_code == VirtualKeyCode::L {
+                            self.wireframe = !self.wireframe;
                         }
                     }
                 }
@@ -389,7 +407,7 @@ impl State {
 
             self.world_state.render_back(&mut render_pass, &self.camera);
             // self.world_state.render_sun(&mut render_pass, &self.camera);
-            self.world_state.render_visible_planets( &mut render_pass, &self.camera, &self.world);
+            self.world_state.render_visible_planets( &mut render_pass, &self.camera, &self.world, self.wireframe);
 
             //render cube
             self.render_cube(&mut render_pass);
@@ -533,8 +551,14 @@ mod test{
             position: Vec3::new(0.0, 0.0, 0.0),
             rotation: Quaternion::identity(),
             mesh_grid_segment_num: grid_segment_num,
-            seed: 0,
-            terrain_elevation_bounds: (-3.0, 3.0),
+            terrain_noise: utils::NoiseDescriptor{
+                seed: 0,
+                frequency: 10.0,
+                lacunarity: 2.0,
+                persistence: 0.5,
+                octaves: 8,
+            },
+            elevation_scale: 3.0,
         };
 
   
@@ -597,7 +621,8 @@ mod test{
 
     #[test]
     fn _build_world_2(){
-        _build_world(5, 64);
+        let mb = _build_world(4, 32);
+        println!("level 5 ,grid_segment_num 64 => mb: {}", mb);
     }
 }
 

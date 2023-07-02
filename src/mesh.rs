@@ -21,7 +21,8 @@ pub trait Vertex {
 pub struct MeshVertex{
     pub pos: [f32; 3],
     pub tex_coord: [f32; 2],
-    pub normal: [f32; 3]
+    pub normal: [f32; 3],
+    pub tangent: [f32; 3],
 }
 
 
@@ -31,14 +32,15 @@ impl Default for MeshVertex{
         Self{
             pos: [0.0, 0.0, 0.0],
             tex_coord: [0.0, 0.0],
-            normal: [0.0, 0.0, 0.0]
+            normal: [0.0, 0.0, 0.0],
+            tangent: [0.0, 0.0, 0.0],
         }
     }
 }
 
 impl VertexLayout for MeshVertex {
 
-    ///location length : 3
+    ///location length : 4
     fn vertex_layout<const LOCATION: u32>() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
 
@@ -59,6 +61,11 @@ impl VertexLayout for MeshVertex {
                 wgpu::VertexAttribute{
                     offset: mem::size_of::<[f32; 5]>() as u64,
                     shader_location: 2 + LOCATION,
+                    format: wgpu::VertexFormat::Float32x3
+                },
+                wgpu::VertexAttribute{
+                    offset: mem::size_of::<[f32; 8]>() as u64,
+                    shader_location: 3 + LOCATION,
                     format: wgpu::VertexFormat::Float32x3
                 }
             ]
@@ -267,6 +274,7 @@ impl Mesh{
                 pos: triangles.0[i as usize],
                 normal: axis.normal(),
                 tex_coord: [(i % rows) as f32 / rows as f32, i as f32 / rows as f32],
+                tangent: axis.tangent(),
             }
         }).collect();
 
@@ -289,6 +297,7 @@ impl Mesh{
                 pos: triangles.0[i as usize],
                 normal: [0.0, 0.0, 0.0],
                 tex_coord: [0.0, 0.0],
+                tangent: [0.0, 0.0, 0.0],
             }
         }).collect();
 
@@ -324,6 +333,70 @@ impl Mesh{
         let len = self.vertices.len();
         self.vertices.extend_from_slice(&other.vertices);
         self.indices.extend_from_slice(&other.indices.iter().map(|i| i + len as u32).collect::<Vec<u32>>());
+    }
+
+
+    pub fn calc_tangent(&mut self) {
+        //set zero
+        for v in &mut self.vertices {
+            v.tangent = [0.0, 0.0, 0.0];
+        }
+        for i in (0..self.indices.len()).into_iter().step_by(3) {
+            let i0 = self.indices[i + 0] as usize;
+            let i1 = self.indices[i + 1] as usize;
+            let i2 = self.indices[i + 2] as usize;
+            let v0 = Vec3::<f32>::from(self.vertices[i0].pos);
+            let v1 = Vec3::<f32>::from(self.vertices[i1].pos);
+            let v2 = Vec3::<f32>::from(self.vertices[i2].pos);
+            let uv0 = Vec2::<f32>::from(self.vertices[i0].tex_coord);
+            let uv1 = Vec2::<f32>::from(self.vertices[i1].tex_coord);
+            let uv2 = Vec2::<f32>::from(self.vertices[i2].tex_coord);
+            let delta_pos1 = v1 - v0;
+            let delta_pos2 = v2 - v0;
+            let delta_uv1 = uv1 - uv0;
+            let delta_uv2 = uv2 - uv0;
+            let r = 1.0 / (delta_uv1.x * delta_uv2.y - delta_uv1.y * delta_uv2.x);
+            let tangent: Vec3<f32> = (delta_pos1 * delta_uv2.y - delta_pos2 * delta_uv1.y) * r;
+
+            //add
+            self.vertices[i0].tangent = (Vec3::<f32>::from(self.vertices[i0].tangent) + tangent).into_array();
+            self.vertices[i1].tangent = (Vec3::<f32>::from(self.vertices[i1].tangent) + tangent).into_array();
+            self.vertices[i2].tangent = (Vec3::<f32>::from(self.vertices[i2].tangent) + tangent).into_array();
+        }
+
+        //normalize
+        for v in &mut self.vertices {
+            let tangent = Vec3::<f32>::from(v.tangent);
+            v.tangent = (tangent.normalized()).into_array();
+        }
+
+    }
+
+
+    pub fn calc_normal(&mut self) {
+        //set zero
+        for v in &mut self.vertices {
+            v.normal = [0.0, 0.0, 0.0];
+        }
+        for i in (0..self.indices.len()).into_iter().step_by(3) {
+            let i0 = self.indices[i + 0] as usize;
+            let i1 = self.indices[i + 1] as usize;
+            let i2 = self.indices[i + 2] as usize;
+            let v0 = Vec3::<f32>::from(self.vertices[i0].pos);
+            let v1 = Vec3::<f32>::from(self.vertices[i1].pos);
+            let v2 = Vec3::<f32>::from(self.vertices[i2].pos);
+            let normal = (v1 - v0).cross(v2 - v0);
+            //add
+            self.vertices[i0].normal = (Vec3::<f32>::from(self.vertices[i0].normal) + normal).into_array();
+            self.vertices[i1].normal = (Vec3::<f32>::from(self.vertices[i1].normal) + normal).into_array();
+            self.vertices[i2].normal = (Vec3::<f32>::from(self.vertices[i2].normal) + normal).into_array();
+        }
+
+        //normalize
+        for v in &mut self.vertices {
+            let normal = Vec3::<f32>::from(v.normal);
+            v.normal = (normal.normalized()).into_array();
+        }
     }
 }
 
